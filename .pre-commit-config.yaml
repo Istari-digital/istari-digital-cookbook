@@ -30,6 +30,7 @@ repos:
         files: \.ipynb$
       - id: nbqa-mypy
         files: \.ipynb$
+        args: ["--ignore-missing-imports"]
 
   - repo: https://github.com/kynan/nbstripout
     rev: 0.6.1
