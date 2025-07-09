@@ -1,7 +1,7 @@
 import os
 import sys
 import nbformat
-from nbclient import NotebookClient, CellExecutionError
+from nbclient import NotebookClient
 
 def find_notebooks(root="."):
     """Find all .ipynb files excluding .ipynb_checkpoints"""
@@ -29,10 +29,6 @@ def run_notebook(path, timeout=600, save_output=False):
 
         print(f"✅ Finished {path}")
         return True
-
-    except CellExecutionError as e:
-        print(f"❌ Execution failed in {path}:\n{e}")
-        return False
 
     except Exception as e:
         print(f"❌ Unexpected error in {path}:\n{e}")
