@@ -34,15 +34,13 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Create and activate venv
+      - name: Install project dependencies
         run: |
-          uv venv .venv
-          source .venv/bin/activate
-          uv sync --only-dev
+          uv sync
 
       - name: Register Jupyter kernel
         run: |
-          .venv/bin/python -m ipykernel install --name=python3 --prefix=.venv
+          python -m ipykernel install --user --name=python3
 
       - name: Run all notebooks
         run: |
