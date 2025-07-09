@@ -28,6 +28,8 @@ pre-commit = "^3.8.0"
 ruff = "^0.5.0"
 mypy = "^1.10"
 nbqa = "^1.8"
+nbclient = "^0.10.2"
+nbformat = "^5.10.4"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,4 +1,3 @@
----
 name: 'Test'
 on:  # yamllint disable-line rule:truthy
   push:
@@ -12,10 +11,14 @@ on:  # yamllint disable-line rule:truthy
       - synchronize
       - reopened
 
+env:
+  PYTHONPATH: ${{ github.workspace }}
+
 jobs:
   test-notebooks:
     name: Test Notebooks
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,24 +28,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Setup project
+      - name: Install Poetry
         run: |
-          pip install nbclient nbformat
+          python -m pip install poetry
 
-      - name: Run notebooks
+      - name: Install project dependencies
         run: |
-          set -e
-          for nb in $(find . -name "*.ipynb" -not -path "*/.ipynb_checkpoints/*"); do
-            echo "🔍 Running $nb"
-            python - <<EOF
-          import nbformat
-          from nbclient import NotebookClient
+          poetry install --no-interaction
 
-          with open("$nb") as f:
-              nb = nbformat.read(f, as_version=4)
-
-          client = NotebookClient(nb, timeout=600)
-          client.execute()
-          EOF
-            echo "✅ Finished $nb"
-          done
+      - name: Run all notebooks
+        run: |
+          poetry run python run_notebooks.py
