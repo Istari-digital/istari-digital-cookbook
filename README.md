@@ -18,8 +18,8 @@ To run the examples, you will need the following:
 ## Documentation
 See the official [Istari Digital Documentation](https://docs.istaridigital.com) website for applicable Istari Digital Client documentation.
 
-## License 
-No license is hereby implied or granted to any patent or patent application relating to the Istari Digital platform itself. 
+## License
+No license is hereby implied or granted to any patent or patent application relating to the Istari Digital platform itself.
 The list of patents applicable to the Istari Digital platform may be found at istaridigital.com/patent-list.
 
 See the [license file](./LICENSE) for additional info.

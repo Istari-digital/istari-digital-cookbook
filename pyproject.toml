@@ -1,0 +1,41 @@
+[project]
+name = "istari-digital-client-cookbook"
+version = "0.1.0"
+description = ""
+authors = [{name = "Istari Digital Developers"}]
+readme = "README.md"
+requires-python = ">=3.10, <4.0"
+license = { file = "LICENSE" }
+
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.8.0"
+ruff = "^0.5.0"
+mypy = "^1.10"
+nbqa = "^1.8"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.nbqa.config]
+addopts = ["--nbqa-mutate"]
+
+[tool.nbqa.mutate]
+ruff = true
+mypy = false

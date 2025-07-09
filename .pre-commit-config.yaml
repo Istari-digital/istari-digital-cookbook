@@ -1,0 +1,39 @@
+repos:
+  - repo: local
+    hooks:
+      - id: trufflehog
+        name: Trufflehog
+        description: Detect secrets in your data.
+        language: system
+        entry: trufflehog filesystem --results=verified,unknown --fail --log-level=-1
+        require_serial: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-aws-credentials
+        args: ['--allow-missing-credentials']
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: ['--markdown-linebreak-ext=md']
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: forbid-submodules
+
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.8.4
+    hooks:
+      - id: nbqa-ruff
+        args: [--fix]
+        additional_dependencies: [ruff]
+        files: \.ipynb$
+      - id: nbqa-mypy
+        files: \.ipynb$
+        args: ["--ignore-missing-imports"]
+
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.6.1
+    hooks:
+      - id: nbstripout
+        files: \.ipynb$
