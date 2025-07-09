@@ -1,0 +1,39 @@
+---
+name: 'Test'
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  test-notebooks:
+    name: Test Notebooks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup project
+        run: |
+          set -e
+          python -m pip install poetry
+          poetry add nbclient nbformat
+
+      - name: Run notebooks
+        run: |
+          for nb in $(find . -name "*.ipynb"); do
+            echo "Running $nb"
+            python -m nbclient --timeout=600 --execute "$nb"
+          done
