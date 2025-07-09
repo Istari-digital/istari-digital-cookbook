@@ -36,7 +36,7 @@ jobs:
 
       - name: Install project dependencies
         run: |
-          uv pip install .[dev]
+          uv sync --only-dev
 
       - name: Register Jupyter kernel
         run: |
