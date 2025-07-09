@@ -11,6 +11,10 @@ on:  # yamllint disable-line rule:truthy
       - synchronize
       - reopened
 
+env:
+  REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+  REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+
 jobs:
   test-notebooks:
     name: Test Notebooks
