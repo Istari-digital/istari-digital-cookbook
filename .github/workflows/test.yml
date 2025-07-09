@@ -11,9 +11,6 @@ on:  # yamllint disable-line rule:truthy
       - synchronize
       - reopened
 
-env:
-  PYTHONPATH: ${{ github.workspace }}
-
 jobs:
   test-notebooks:
     name: Test Notebooks
