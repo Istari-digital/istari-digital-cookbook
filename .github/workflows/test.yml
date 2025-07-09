@@ -27,9 +27,7 @@ jobs:
 
       - name: Setup project
         run: |
-          set -e
-          python -m pip install poetry
-          poetry add nbclient nbformat
+          pip install nbclient nbformat
 
       - name: Run notebooks
         run: |
