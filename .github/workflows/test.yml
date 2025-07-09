@@ -43,4 +43,4 @@ jobs:
 
       - name: Run all notebooks
         run: |
-          python .github/scripts/run_notebooks.py
+          uv run python .github/scripts/run_notebooks.py
