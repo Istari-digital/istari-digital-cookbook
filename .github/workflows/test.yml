@@ -38,4 +38,4 @@ jobs:
 
       - name: Run all notebooks
         run: |
-          poetry run python run_notebooks.py
+          poetry run python .github/scripts/run_notebooks.py
