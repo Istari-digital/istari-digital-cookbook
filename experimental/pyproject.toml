@@ -35,3 +35,6 @@ packages = ["istari_experimental"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: marks tests as integration tests (require a live Istari platform)",
+]

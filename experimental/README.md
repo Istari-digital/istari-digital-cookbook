@@ -182,10 +182,22 @@ model = cfg.find_model(external_id="dod-safe-berserker")
 
 ## Tests
 
+### Unit tests (no platform required)
+
 ```bash
 uv sync --extra dev
-uv run pytest tests/ -v
+uv run pytest tests/ -m "not integration" -v
 ```
+
+### Integration tests (live platform)
+
+Set credentials in `.env`, then:
+
+```bash
+uv run pytest tests/integration/ -m integration -v
+```
+
+The integration suite uploads `Group3-UAS-Requirements.xlsx`, runs `open_spreadsheet @istari:extract`, and verifies that `named_cells.json`, `worksheet_data.json`, `workbook.pdf`, and `workbook.html` are produced. It also downloads `named_cells.json` and asserts it is valid JSON.
 
 ## Project layout
 
