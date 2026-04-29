@@ -23,21 +23,24 @@ Entity hierarchy
       |     +-- .current_revision_id / .pinned_revision_id
       |     +-- .get_jobs()            -> list[JobView]
       |     +-- .submit_job()          -> JobView
-      |     +-- .run_job()             -> (id, status, artifacts)
+      |     +-- .run_job()             -> JobView
       +-- JobView             (wraps Job)
       |     +-- .status / .created / .function_name
       |     +-- .model_revision_id
-      |     +-- .get_artifacts()       -> list[ArtifactView]
-      |     +-- .get_artifact_by_name  -> ArtifactView | None
+      |     +-- .revision              -> FileRevision (latest job-output revision)
+      |     +-- .get_products()        -> list[ProductView]
+      |     +-- .find_product()        -> ProductView | None
       |     +-- .wait()                -> self (chainable)
       |     +-- .on_success()          -> self or raise
       |     +-- .completed / .failed   bool properties
-      +-- ArtifactView         (wraps Artifact)
-            +-- .name / .mime / .id
-            +-- .download(dest)        -> Path
-            +-- .read_bytes()          -> bytes
-            +-- .read_text()           -> str
-            +-- .promote()             -> ModelView  (artifact-to-model)
+      +-- ProductView         (wraps Product = race-safe (revision, resource) pair)
+      |     +-- .revision              -> FileRevision  (exact rev the job wrote)
+      |     +-- .resource              -> ResourceView | None  (owning entity)
+      |     +-- .name / .filename / .mime / .file_id / .revision_id
+      |     +-- .read_bytes() / .read_text() / .download(dest)
+      |     +-- .promote()             -> ModelView  (revision-to-model)
+      +-- ResourceView        (wraps a Resource: Artifact, Model, Job, ...)
+            +-- .id / .type / .raw
 
 Quick start
 -----------
@@ -55,10 +58,12 @@ Quick start
     for cfg in system.configurations:
         print(cfg.name, len(cfg.get_models()))
 
-    # Find a model globally, submit a job, wait for results
+    # Find a model globally, submit a job, inspect outputs
     model = platform.find_model(name="My Model")
-    job = model.submit_job(JobDefinition(...))
-    artifacts = job.wait().on_success().get_artifacts()
+    job = model.submit_job(JobDefinition(...)).wait().on_success()
+    for p in job.get_products():
+        rev = p.revision                  # exact revision the agent wrote
+        print(rev.name, rev.file_id, rev.id)
 
     # Upload a model and add it to the baseline configuration
     model = platform.upload_model("model.mdzip", external_id="ext-123")
@@ -76,19 +81,17 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 from istari_digital_client.client import Client as IstariClient
 from istari_digital_client.v2.models import (
-    Model, File, Artifact, System, Job,
+    Model, File, FileRevision, Product, System, Job,
     Snapshot, SystemConfiguration, TrackedFile,
     NewTrackedFile, NewSystemConfiguration, TrackedFileSpecifierType,
     UpdateTag,
 )
 from istari_digital_client import JobStatusName
-
-T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -182,68 +185,155 @@ class JobDefinition(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# ArtifactView
+# ResourceView  --  generic wrapper around a Resource (Artifact/Model/Job/...)
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ArtifactView:
-    """
-    Wraps an Artifact with name access and download support.
+class ResourceView:
+    """Lightweight wrapper around an SDK ``Resource`` (Artifact, Model, Job, ...).
 
-        for a in job.get_artifacts():
-            print(a.name, a.mime)
-        report = job.get_artifact_by_name("report.json")
-        report.download("local_report.json")
+    Returned by ``ProductView.resource`` to expose the entity that owns a
+    product's revision without committing to a specific concrete type.
+
+        product = job.get_products()[0]
+        res = product.resource           # ResourceView | None
+        res.type                         # 'Artifact', 'Model', ...
+        res.raw                          # the underlying SDK model
     """
-    _artifact: Artifact = field(repr=False)
+    _resource: Any = field(repr=False)
     _client: IstariClient = field(repr=False)
 
     def __repr__(self) -> str:
-        mime = self.mime or "?"
-        return f"Artifact({self.name!r}, mime={mime!r}, id={self.id})"
+        return f"Resource(type={self.type!r}, id={self.id})"
 
     @property
-    def id(self) -> str:
-        return self._artifact.id
+    def id(self) -> str | None:
+        return getattr(self._resource, "id", None)
+
+    @property
+    def type(self) -> str:
+        return type(self._resource).__name__
+
+    @property
+    def raw(self) -> Any:
+        return self._resource
+
+
+# ---------------------------------------------------------------------------
+# ProductView  --  wraps a Product (race-safe revision + resource pair)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProductView:
+    """Wraps a ``Product`` -- a derived output produced by a job (or any op).
+
+    A Product captures the exact ``FileRevision`` that was written and the
+    ``Resource`` (Artifact, Model, ...) that owns it.  This is *race-safe*:
+    even if subsequent jobs add new revisions to the same artifact file,
+    a Product still points to the revision created by the original job.
+
+        for p in job.get_products():
+            print(p.name, p.revision.id)
+        report = job.find_product(name="report.json")
+        report.download("local_report.json")
+    """
+    _product: Product = field(repr=False)
+    _client: IstariClient = field(repr=False)
+    _revision: FileRevision | None = field(default=None, repr=False)
+
+    def __repr__(self) -> str:
+        mime = self.mime or "?"
+        return (
+            f"Product({self.name!r}, mime={mime!r}, "
+            f"resource={self.resource_type}/{self.resource_id}, rev={self.revision_id})"
+        )
+
+    # -- product fields -----------------------------------------------------
+
+    @property
+    def raw(self) -> Product:
+        return self._product
+
+    @property
+    def revision_id(self) -> str:
+        return self._product.revision_id
+
+    @property
+    def file_id(self) -> str | None:
+        return self._product.file_id
+
+    @property
+    def resource_type(self) -> str | None:
+        return self._product.resource_type
+
+    @property
+    def resource_id(self) -> str | None:
+        return self._product.resource_id
+
+    @property
+    def relationship_identifier(self) -> str | None:
+        return self._product.relationship_identifier
+
+    # -- lazy lookups -------------------------------------------------------
+
+    @property
+    def revision(self) -> FileRevision:
+        """The exact ``FileRevision`` this product points to (race-safe).
+
+        Fetched lazily on first access and cached on this view.
+        """
+        if self._revision is None:
+            self._revision = self._client.get_revision(self._product.revision_id)
+        return self._revision
+
+    @property
+    def resource(self) -> ResourceView | None:
+        """The owning ``Resource`` (Artifact, Model, ...) wrapped in a view."""
+        if not self._product.resource_type or not self._product.resource_id:
+            return None
+        try:
+            r = self._client.get_resource(self._product.resource_type, self._product.resource_id)
+        except Exception:
+            return None
+        return ResourceView(_resource=r, _client=self._client) if r else None
+
+    # -- revision-derived convenience ---------------------------------------
+
+    @property
+    def id(self) -> str | None:
+        """The owning resource id (e.g. Artifact id), falling back to revision id."""
+        return self._product.resource_id or self._product.revision_id
 
     @property
     def name(self) -> str:
-        rev = self._artifact.file.revision if self._artifact.file else None
-        if rev:
-            return rev.display_name or rev.name or self._artifact.id
-        return self._artifact.id
-
-    @property
-    def mime(self) -> str | None:
-        rev = self._artifact.file.revision if self._artifact.file else None
-        return rev.mime if rev else None
-
-    @property
-    def raw(self) -> Artifact:
-        return self._artifact
-
-    def read_bytes(self) -> bytes:
-        """Return the artifact content as raw bytes."""
-        rev = self._artifact.file.revision
-        return self._client.read_contents(token=rev.content_token)
-
-    def read_text(self, encoding: str = "utf-8") -> str:
-        """Return the artifact content as decoded text."""
-        return self.read_bytes().decode(encoding)
+        rev = self.revision
+        return rev.display_name or rev.name or self._product.revision_id
 
     @property
     def filename(self) -> str:
-        """Original filename from the revision, falling back to artifact id."""
-        rev = self._artifact.file.revision if self._artifact.file else None
-        if rev and rev.name:
-            return rev.name
-        return self._artifact.id
+        """Original filename of the produced revision (with extension)."""
+        rev = self.revision
+        return rev.name or self._product.revision_id
+
+    @property
+    def mime(self) -> str | None:
+        return self.revision.mime
+
+    # -- content access -----------------------------------------------------
+
+    def read_bytes(self) -> bytes:
+        """Return the product's content as raw bytes."""
+        return self._client.read_contents(token=self.revision.content_token)
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        """Return the product's content as decoded text."""
+        return self.read_bytes().decode(encoding)
 
     def download(self, dest: str | Path) -> Path:
-        """Download artifact content to a local path.
+        """Download the product's content to a local path.
 
         *dest* can be a file path or a directory.  When a directory is given
-        the artifact's original filename is used.
+        the product's original filename is used.
         """
         dest = Path(dest)
         if dest.is_dir():
@@ -251,33 +341,33 @@ class ArtifactView:
         dest.write_bytes(self.read_bytes())
         return dest
 
+    # -- mutations ----------------------------------------------------------
+
     def promote(
         self,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
     ) -> ModelView:
-        """Promote this artifact to a standalone model.
+        """Promote this product's revision to a standalone model.
 
         *display_name* sets the human-readable model name (defaults to the
-        artifact's display name).  *filename* sets the file name stored on
-        the platform (defaults to the artifact's original filename, e.g.
+        product's display name).  *filename* sets the file name stored on
+        the platform (defaults to the product's original filename, e.g.
         ``blocks.json``).  The two are independent -- ``filename`` controls
         what ``find_model(filename=...)`` matches against.
 
-        The new model records the artifact revision as a *source*, preserving
-        the provenance chain: ``Original Model -> Job -> Artifact -> Model``.
+        The new model records the product's revision as a *source*, preserving
+        the provenance chain: ``Original Model -> Job -> Product -> Model``.
         """
         from istari_digital_client.v2.models.new_source import NewSource
 
-        rev = self._artifact.file.revision
+        rev = self.revision
         content = self._client.read_contents(token=rev.content_token)
         upload_name = filename or self.filename
         upload_path = Path(upload_name)
         suffix = upload_path.suffix or rev.suffix or ""
 
-        # Display name: explicit > derived from filename > artifact name.
-        # add_model re-appends the suffix from the file path, so strip it.
         if display_name:
             name = display_name
         elif filename:
@@ -318,8 +408,8 @@ class JobView:
         job = model.get_jobs()[0]
         print(job.function_name, job.status, job.created)
         print(job.model_revision_id)          # revision the job ran on
-        artifacts = job.wait().on_success().get_artifacts()
-        report = job.get_artifact_by_name("report.json")
+        products = job.wait().on_success().get_products()
+        report = job.find_product(name="report.json")
     """
     _job: Job = field(repr=False)
     _client: IstariClient = field(repr=False)
@@ -373,7 +463,7 @@ class JobView:
 
         Returns ``self`` so calls can be chained::
 
-            artifacts = job.wait().on_success().get_artifacts()
+            products = job.wait().on_success().get_products()
         """
         start = time.time()
         while True:
@@ -413,53 +503,64 @@ class JobView:
 
         Designed for chaining after ``wait()``::
 
-            job.wait().on_success().get_artifacts()
+            job.wait().on_success().get_products()
         """
         if self.completed:
             return self
         raise RuntimeError(f"Job {self.id} did not complete (status={self.status})")
 
-    def get_artifacts(self) -> list[ArtifactView]:
-        """Return artifacts produced by this job."""
-        job = self._client.get_job(self.id)
-        model = self._client.get_model(job.model_id)
-        if not model or not model.artifacts:
-            return []
-        result: list[ArtifactView] = []
-        for artifact in model.artifacts:
-            if artifact.file and artifact.file.revisions:
-                latest = artifact.file.revisions[-1]
-                for src in latest.sources or []:
-                    if src.resource_type == "Job" and src.resource_id == self.id:
-                        result.append(ArtifactView(_artifact=artifact, _client=self._client))
-                        break
-        return result
+    @property
+    def revision(self) -> FileRevision | None:
+        """Latest ``FileRevision`` of the job's output file (if any).
 
-    def get_artifact_by_name(self, name: str) -> ArtifactView | None:
-        """Find an artifact by name (filename or display_name).
-
-        Deprecated -- prefer ``find_artifact()``.
+        The agent records every output it writes as a ``Product`` on this
+        revision, so ``self.revision.products`` is the source of truth for
+        what the job produced.
         """
-        return self.find_artifact(name=name)
+        if self._job.file and self._job.file.revisions:
+            return self._job.file.revisions[-1]
+        return None
 
-    def find_artifact(
+    def get_products(self, *, resource_type: str | None = None) -> list[ProductView]:
+        """Return products generated by this job (race-safe).
+
+        Reads ``job.revision.products`` -- each ``Product`` points to the
+        exact ``FileRevision`` the agent wrote, so concurrent jobs that add
+        new revisions to the same artifact files cannot affect what this
+        method returns.
+
+        ``resource_type`` (e.g. ``"Artifact"``) filters by the owning resource.
+        """
+        job = self._client.get_job(self.id)
+        self._job = job
+        rev = self.revision
+        if rev is None or not rev.products:
+            return []
+        products = rev.products
+        if resource_type:
+            products = [p for p in products if p.resource_type == resource_type]
+        return [ProductView(_product=p, _client=self._client) for p in products]
+
+    def find_product(
         self,
         *,
         name: str | None = None,
         filename: str | None = None,
-    ) -> ArtifactView | None:
-        """Find an artifact by display name or filename (with extension).
+        resource_type: str | None = None,
+    ) -> ProductView | None:
+        """Find a product by display name, filename, and/or resource type.
 
-        ``name`` matches against display_name or rev.name (like ``ArtifactView.name``).
+        ``name`` matches against display_name or rev.name (like ``ProductView.name``).
         ``filename`` matches against the revision's actual filename (``rev.name``).
+        ``resource_type`` restricts the search to e.g. ``"Artifact"``.
         """
         if not name and not filename:
             raise ValueError("Provide name or filename")
-        for a in self.get_artifacts():
-            if name and a.name == name:
-                return a
-            if filename and a.filename == filename:
-                return a
+        for p in self.get_products(resource_type=resource_type):
+            if name and p.name == name:
+                return p
+            if filename and p.filename == filename:
+                return p
         return None
 
     def attach_file(
@@ -628,7 +729,7 @@ class ModelView:
         Raises ``RuntimeError`` if the job fails or times out.
 
             job = model.run_job(definition)
-            artifacts = job.get_artifacts()
+            products = job.get_products()
         """
         jv = self.submit_job(definition, save_input=save_input, save_input_as_revision=save_input_as_revision)
         return jv.wait(timeout=timeout, poll_interval=poll_interval).on_success()
@@ -713,15 +814,15 @@ class TrackedFileSet:
         ))
         return self
 
-    def add_artifact_as_model(
+    def add_product_as_model(
         self,
-        artifact: ArtifactView,
+        product: ProductView,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
     ) -> TrackedFileSet:
-        """Promote an artifact to a model and track it. Returns ``self`` for chaining."""
-        mv = artifact.promote(display_name=display_name, filename=filename, external_identifier=external_identifier)
+        """Promote a product to a model and track it. Returns ``self`` for chaining."""
+        mv = product.promote(display_name=display_name, filename=filename, external_identifier=external_identifier)
         self._entries.append(NewTrackedFile(
             specifier_type=TrackedFileSpecifierType.LATEST,
             file_id=mv.file_id,
@@ -882,20 +983,20 @@ class ConfigurationView:
             tracked=self.get_tracked_files(),
         ).add_revision(file_id, revision_id)
 
-    def add_artifact_as_model(
+    def add_product_as_model(
         self,
-        artifact: ArtifactView,
+        product: ProductView,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
     ) -> TrackedFileSet:
-        """Promote an artifact to a model and track it in a new configuration."""
+        """Promote a product to a model and track it in a new configuration."""
         return TrackedFileSet(
             system_id=self._config.system_id,
             base_name=self._config.name,
             client=self._client,
             tracked=self.get_tracked_files(),
-        ).add_artifact_as_model(artifact, display_name=display_name, filename=filename, external_identifier=external_identifier)
+        ).add_product_as_model(product, display_name=display_name, filename=filename, external_identifier=external_identifier)
 
     def set_baseline(self) -> ConfigurationView:
         """Move the system's baseline tag to this configuration's snapshot.
@@ -1261,142 +1362,3 @@ def _add_tracked_file(
         tracked_files=[tf],
     )
     return client.create_configuration(system_id=system_id, new_system_configuration=cfg)
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatible free functions
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-def get_file_by_name(client: IstariClient, file_name: str, verbose: bool = False) -> File | None:
-    p = IstariPlatform(client)
-    return p.find_file(file_name)
-
-
-
-def upload_model_file(
-    client: IstariClient,
-    file_path: str | Path,
-    external_id: str,
-    model_name: str | None = None,
-    sources: list[Any] | None = None,
-    verbose: bool = True,
-) -> tuple[File, Model] | None:
-    file_path = Path(file_path)
-    if not file_path.exists():
-        return None
-    model = client.add_model(
-        path=file_path,
-        external_identifier=external_id,
-        display_name=model_name or file_path.stem,
-        sources=sources,
-    )
-    return (model.file, model) if model.file else None
-
-
-def upload_file_and_attach_to_job(
-    client: IstariClient,
-    job: Job,
-    file_path: str | Path,
-    display_name: str,
-    upload_as_model: bool = False,
-    external_id: str | None = None,
-    verbose: bool = False,
-) -> Job:
-    jv = JobView(_job=job, _client=client)
-    jv.attach_file(file_path, display_name, as_model=upload_as_model, external_id=external_id)
-    return jv._job
-
-
-def submit_job_with_parameters(
-    client: IstariClient,
-    model_id: str,
-    job_definition: JobDefinition | None = None,
-    input_json_data: dict | str | None = None,
-    function: str | None = None,
-    tool_name: str | None = None,
-    tool_version: str | None = None,
-    operating_system: str | None = None,
-    save_input: bool = False,
-    save_input_as_revision: bool = False,
-    verbose: bool = False,
-) -> Job:
-    if job_definition is None:
-        job_definition = JobDefinition(
-            input_json_data=input_json_data if isinstance(input_json_data, dict) else None,
-            function=function,
-            tool_name=tool_name,
-            tool_version=tool_version,
-            operating_system=operating_system,
-        )
-    return _submit_job_impl(client, model_id, job_definition, save_input=save_input, save_input_as_revision=save_input_as_revision)
-
-
-
-def run_job_with_parameters(
-    client: IstariClient,
-    model_id: str,
-    job_definition: JobDefinition,
-    timeout: int = 3600,
-    save_input: bool = False,
-    save_input_as_revision: bool = False,
-    poll_interval: int = 5,
-    verbose: bool = True,
-) -> JobView:
-    """Submit a job, wait for completion, return the JobView.
-
-    Prefer ``model.run_job(definition)`` instead.
-    """
-    mv = ModelView(_model=client.get_model(model_id), _client=client)
-    jv = mv.submit_job(job_definition, save_input=save_input, save_input_as_revision=save_input_as_revision)
-    return jv.wait(timeout=timeout, poll_interval=poll_interval)
-
-
-def get_job_artifacts(client: IstariClient, job_id: str, verbose: bool = False) -> list[Artifact]:
-    job = client.get_job(job_id)
-    jv = JobView(_job=job, _client=client)
-    return jv.get_artifacts()
-
-
-def list_all_models_with_details(client: IstariClient, verbose: bool = True) -> list[dict[str, Any]]:
-    page = client.list_models()
-    results = []
-    for m in page.iter_items():
-        if m.file:
-            try:
-                f = client.get_file(m.file.id)
-                results.append({
-                    "model_id": m.id,
-                    "model_name": m.name,
-                    "model_display_name": getattr(m, "display_name", None),
-                    "file_id": m.file.id,
-                    "file_name": f.name,
-                    "external_identifier": getattr(f, "external_identifier", None),
-                    "description": getattr(f, "description", None),
-                })
-            except Exception:
-                continue
-    return results
-
-
-def list_all_module_names(client: IstariClient, verbose: bool = True) -> list[str]:
-    return [m.name for m in _paginate_manually(client.list_modules) if m.name]
-
-
-def add_file_to_system(client: IstariClient, system_id: str, file_id: str, configuration_name: str | None = None, verbose: bool = False) -> Any:
-    return _add_tracked_file(client, system_id, file_id=file_id, config_name=configuration_name)
-
-
-def add_revision_to_system(client: IstariClient, system_id: str, revision_id: str, configuration_name: str | None = None, verbose: bool = False) -> Any:
-    return _add_tracked_file(client, system_id, revision_id=revision_id, config_name=configuration_name)
-
-
-
-def get_configurations_for_model(client: IstariClient, model_id: str, verbose: bool = True) -> list[tuple[System, Any]]:
-    mv = ModelView(_model=client.get_model(model_id), _client=client)
-    return mv.get_configurations()

@@ -8,11 +8,12 @@ import pytest
 
 from istari_digital_client import JobStatusName
 from istari_experimental.istari_utils import (
-    ArtifactView,
     IstariPlatform,
     JobDefinition,
     JobView,
     ModelView,
+    ProductView,
+    ResourceView,
 )
 
 
@@ -47,44 +48,52 @@ def _make_model(model_id: str = "model-1", display_name: str = "My Model") -> Ma
     return model
 
 
-def _make_artifact(
-    artifact_id: str = "art-1",
+def _make_product(
+    *,
+    revision_id: str = "rev-1",
+    file_id: str = "file-1",
+    resource_type: str = "Artifact",
+    resource_id: str = "art-1",
     name: str = "output.json",
+    mime: str = "application/json",
     content: bytes = b"{}",
 ) -> tuple[MagicMock, MagicMock]:
-    artifact = MagicMock()
-    artifact.id = artifact_id
+    """Build a (Product, Client) pair where the client resolves the revision."""
+    product = MagicMock()
+    product.revision_id = revision_id
+    product.file_id = file_id
+    product.resource_type = resource_type
+    product.resource_id = resource_id
+    product.relationship_identifier = None
+
     rev = MagicMock()
+    rev.id = revision_id
+    rev.file_id = file_id
     rev.display_name = name
     rev.name = name
-    rev.mime = "application/json"
-    rev.content_token = f"token-{artifact_id}"
-    artifact.file.revision = rev
-    artifact.file.revisions = [rev]
+    rev.mime = mime
+    rev.suffix = ""
+    rev.content_token = f"token-{revision_id}"
+
     client = MagicMock()
+    client.get_revision.return_value = rev
     client.read_contents.return_value = content
-    return artifact, client
+    return product, client
 
 
-def _make_artifact_with_job_source(
+def _make_job_with_products(
     job_id: str,
-    artifact_id: str = "art-1",
-    name: str = "report.json",
+    products: list[MagicMock],
+    status: JobStatusName = JobStatusName.COMPLETED,
 ) -> MagicMock:
-    src = MagicMock()
-    src.resource_type = "Job"
-    src.resource_id = job_id
+    """Build a Job mock whose latest revision lists the given products."""
+    job = _make_job(status)
+    job.id = job_id
     rev = MagicMock()
-    rev.display_name = name
-    rev.name = name
-    rev.mime = "application/json"
-    rev.content_token = "tok"
-    rev.sources = [src]
-    artifact = MagicMock()
-    artifact.id = artifact_id
-    artifact.file.revisions = [rev]
-    artifact.file.revision = rev
-    return artifact
+    rev.products = products
+    job.file = MagicMock()
+    job.file.revisions = [rev]
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -122,63 +131,44 @@ class TestJobView:
         assert result is jv
         _sleep.assert_not_called()
 
-    def test_get_artifacts_returns_artifacts_linked_to_this_job(self):
-        job_id = "job-99"
-        mock_artifact = _make_artifact_with_job_source(job_id, name="report.json")
+    def test_get_products_reads_jobs_revision_products(self):
+        product, client = _make_product(name="report.json")
+        mock_job = _make_job_with_products("job-99", [product])
+        client.get_job.return_value = mock_job
 
-        mock_job = _make_job(JobStatusName.COMPLETED)
-        mock_job.id = job_id
-        mock_job.model_id = "model-1"
+        jv = JobView(_job=mock_job, _client=client)
+        products = jv.get_products()
+        assert len(products) == 1
+        assert products[0].name == "report.json"
+        assert isinstance(products[0], ProductView)
 
-        mock_model = _make_model("model-1")
-        mock_model.artifacts = [mock_artifact]
+    def test_get_products_returns_empty_when_revision_has_no_products(self):
+        mock_job = _make_job_with_products("job-99", [])
+        client = MagicMock()
+        client.get_job.return_value = mock_job
 
-        mock_client = MagicMock()
-        mock_client.get_job.return_value = mock_job
-        mock_client.get_model.return_value = mock_model
+        jv = JobView(_job=mock_job, _client=client)
+        assert jv.get_products() == []
 
-        jv = JobView(_job=mock_job, _client=mock_client)
-        artifacts = jv.get_artifacts()
+    def test_get_products_filters_by_resource_type(self):
+        artifact_p, client = _make_product(name="a.json", resource_type="Artifact")
+        model_p, _ = _make_product(name="m.json", resource_type="Model")
+        mock_job = _make_job_with_products("job-99", [artifact_p, model_p])
+        client.get_job.return_value = mock_job
+
+        jv = JobView(_job=mock_job, _client=client)
+        artifacts = jv.get_products(resource_type="Artifact")
         assert len(artifacts) == 1
-        assert artifacts[0].name == "report.json"
+        assert artifacts[0].resource_type == "Artifact"
 
-    def test_get_artifacts_excludes_artifacts_from_other_jobs(self):
-        src = MagicMock()
-        src.resource_type = "Job"
-        src.resource_id = "some-other-job"
-        rev = MagicMock()
-        rev.sources = [src]
-        artifact = MagicMock()
-        artifact.file.revisions = [rev]
+    def test_find_product_by_name(self):
+        product, client = _make_product(name="report.json")
+        mock_job = _make_job_with_products("job-99", [product])
+        client.get_job.return_value = mock_job
 
-        mock_job = _make_job(JobStatusName.COMPLETED)
-        mock_job.id = "job-99"
-        mock_job.model_id = "model-1"
-        mock_model = _make_model("model-1")
-        mock_model.artifacts = [artifact]
-
-        mock_client = MagicMock()
-        mock_client.get_job.return_value = mock_job
-        mock_client.get_model.return_value = mock_model
-
-        jv = JobView(_job=mock_job, _client=mock_client)
-        assert jv.get_artifacts() == []
-
-    def test_find_artifact_by_name(self):
-        job_id = "job-99"
-        mock_artifact = _make_artifact_with_job_source(job_id, name="report.json")
-        mock_job = _make_job(JobStatusName.COMPLETED)
-        mock_job.id = job_id
-        mock_job.model_id = "model-1"
-        mock_model = _make_model("model-1")
-        mock_model.artifacts = [mock_artifact]
-        mock_client = MagicMock()
-        mock_client.get_job.return_value = mock_job
-        mock_client.get_model.return_value = mock_model
-
-        jv = JobView(_job=mock_job, _client=mock_client)
-        assert jv.find_artifact(name="report.json") is not None
-        assert jv.find_artifact(name="missing.json") is None
+        jv = JobView(_job=mock_job, _client=client)
+        assert jv.find_product(name="report.json") is not None
+        assert jv.find_product(name="missing.json") is None
 
 
 # ---------------------------------------------------------------------------
@@ -224,38 +214,58 @@ class TestModelView:
 
 
 # ---------------------------------------------------------------------------
-# ArtifactView
+# ProductView
 # ---------------------------------------------------------------------------
 
-class TestArtifactView:
+class TestProductView:
     def test_name_from_revision_display_name(self):
-        artifact, client = _make_artifact(name="results.json")
-        av = ArtifactView(_artifact=artifact, _client=client)
-        assert av.name == "results.json"
+        product, client = _make_product(name="results.json")
+        pv = ProductView(_product=product, _client=client)
+        assert pv.name == "results.json"
+
+    def test_revision_is_lazy_loaded_and_cached(self):
+        product, client = _make_product()
+        pv = ProductView(_product=product, _client=client)
+        _ = pv.name
+        _ = pv.mime
+        _ = pv.filename
+        assert client.get_revision.call_count == 1
 
     def test_read_bytes(self):
-        artifact, client = _make_artifact(content=b"\x00\x01\x02")
-        av = ArtifactView(_artifact=artifact, _client=client)
-        assert av.read_bytes() == b"\x00\x01\x02"
+        product, client = _make_product(content=b"\x00\x01\x02")
+        pv = ProductView(_product=product, _client=client)
+        assert pv.read_bytes() == b"\x00\x01\x02"
 
     def test_read_text(self):
-        artifact, client = _make_artifact(content=b'{"ok": true}')
-        av = ArtifactView(_artifact=artifact, _client=client)
-        assert av.read_text() == '{"ok": true}'
+        product, client = _make_product(content=b'{"ok": true}')
+        pv = ProductView(_product=product, _client=client)
+        assert pv.read_text() == '{"ok": true}'
 
     def test_download_writes_to_explicit_path(self, tmp_path):
-        artifact, client = _make_artifact(content=b"file content")
-        av = ArtifactView(_artifact=artifact, _client=client)
+        product, client = _make_product(content=b"file content")
+        pv = ProductView(_product=product, _client=client)
         dest = tmp_path / "result.json"
-        av.download(dest)
+        pv.download(dest)
         assert dest.read_bytes() == b"file content"
 
-    def test_download_to_directory_uses_artifact_filename(self, tmp_path):
-        artifact, client = _make_artifact(name="output.json", content=b"data")
-        av = ArtifactView(_artifact=artifact, _client=client)
-        result = av.download(tmp_path)
+    def test_download_to_directory_uses_product_filename(self, tmp_path):
+        product, client = _make_product(name="output.json", content=b"data")
+        pv = ProductView(_product=product, _client=client)
+        result = pv.download(tmp_path)
         assert result.name == "output.json"
         assert result.read_bytes() == b"data"
+
+    def test_resource_returns_resource_view(self):
+        product, client = _make_product(resource_type="Artifact", resource_id="art-1")
+        underlying = MagicMock()
+        underlying.id = "art-1"
+        client.get_resource.return_value = underlying
+
+        pv = ProductView(_product=product, _client=client)
+        rv = pv.resource
+        assert isinstance(rv, ResourceView)
+        assert rv.id == "art-1"
+        client.get_resource.assert_called_once_with("Artifact", "art-1")
 
 
 # ---------------------------------------------------------------------------

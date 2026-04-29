@@ -46,23 +46,28 @@ IstariPlatform                (entry point)
   |     +-- .get_models()            -> list[ModelView]
   |     +-- .get_tracked_files()     -> list[TrackedFile]
   |     +-- .add_file()              -> TrackedFileSet (builder)
-  |     +-- .add_artifact_as_model() -> TrackedFileSet (builder)
+  |     +-- .add_product_as_model()  -> TrackedFileSet (builder)
   |     +-- .set_baseline()          -> self
   +-- TrackedFileSet           (builder for new configurations)
-  |     +-- .add_file() / .add_artifact_as_model() / .add_revision()  -> self
+  |     +-- .add_file() / .add_product_as_model() / .add_revision()  -> self
   |     +-- .save(name=None)         -> ConfigurationView
   +-- ModelView               (wraps Model)
   |     +-- .get_jobs()              -> list[JobView]
   |     +-- .submit_job()            -> JobView
   |     +-- .run_job()               -> JobView (submit + wait)
   +-- JobView                 (wraps Job)
-  |     +-- .get_artifacts()         -> list[ArtifactView]
-  |     +-- .find_artifact()         -> ArtifactView | None
+  |     +-- .revision                -> FileRevision (job's output revision)
+  |     +-- .get_products()          -> list[ProductView]   (race-safe)
+  |     +-- .find_product()          -> ProductView | None
   |     +-- .wait()                  -> self (chainable)
   |     +-- .on_success()            -> self or raise
-  +-- ArtifactView            (wraps Artifact)
-        +-- .download() / .read_bytes() / .read_text()
-        +-- .promote()               -> ModelView
+  +-- ProductView             (wraps Product = (revision, resource) pair)
+  |     +-- .revision                -> FileRevision (exact rev the job wrote)
+  |     +-- .resource                -> ResourceView | None
+  |     +-- .download() / .read_bytes() / .read_text()
+  |     +-- .promote()               -> ModelView
+  +-- ResourceView            (wraps Resource: Artifact, Model, Job, ...)
+        +-- .id / .type / .raw
 ```
 
 ## Usage
@@ -128,31 +133,35 @@ job = model.submit_job(JobDefinition(
 
 job.wait(timeout=600)
 
-for a in job.get_artifacts():
-    print(a.name, a.mime)
+# Each ProductView points to the exact FileRevision the agent wrote
+# (race-safe: unaffected by any later jobs that touch the same files).
+for p in job.get_products():
+    rev = p.revision
+    print(p.name, p.mime, "rev=", rev.id, "file=", rev.file_id)
 ```
 
-### Download an artifact
+### Download a product
 
 ```python
 job = platform.get_job("job-uuid")
-report = job.find_artifact(name="report.json")
+report = job.find_product(name="report.json")
 report.download("local_report.json")
 
 # or read content directly
 data = report.read_text()
 ```
 
-### Promote an artifact to a model (job chaining)
+### Promote a product to a model (job chaining)
 
-Take an artifact produced by a job, promote it to a standalone model with source traceability, and add it to the configuration so a subsequent job can run on it.
+Take a product written by a job, promote it to a standalone model with source
+traceability, and add it to the configuration so a subsequent job can run on it.
 
 ```python
 job = platform.get_job("job-uuid")
-output = job.find_artifact(name="extraction_output.json")
+output = job.find_product(name="extraction_output.json")
 
 # Promote and add to config in one chain
-new_cfg = cfg.add_artifact_as_model(
+new_cfg = cfg.add_product_as_model(
     output,
     display_name="Extracted Data",
 ).save()
