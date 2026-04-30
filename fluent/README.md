@@ -31,8 +31,8 @@ uv sync --extra experiment
 Copy `.env.example` to `.env` and fill in your credentials (do not commit it):
 
 ```
-ISTARI_PAT=your_personal_access_token
-ISTARI_ENVIRONMENT_URL=https://fileservice-v2.demo.istari.app
+ISTARI_REGISTRY_URL=https://fileservice-v2.demo.istari.app
+ISTARI_PERSONAL_ACCESS_TOKEN=your_personal_access_token
 ```
 
 ## Entity hierarchy

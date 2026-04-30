@@ -2,8 +2,8 @@
 
 Requires a live Istari platform. Set credentials in .env:
 
-    ISTARI_PAT=your_token
-    ISTARI_ENVIRONMENT_URL=https://fileservice-v2.demo.istari.app
+    ISTARI_REGISTRY_URL=https://fileservice-v2.demo.istari.app
+    ISTARI_PERSONAL_ACCESS_TOKEN=your_token
 
 Run with:
 

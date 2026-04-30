@@ -11,6 +11,6 @@ from istari_fluent import IstariPlatform
 @pytest.fixture(scope="session")
 def platform():
     load_dotenv()
-    if not os.getenv("ISTARI_PAT"):
-        pytest.skip("ISTARI_PAT not set -- skipping integration tests")
+    if not os.getenv("ISTARI_PERSONAL_ACCESS_TOKEN"):
+        pytest.skip("ISTARI_PERSONAL_ACCESS_TOKEN not set -- skipping integration tests")
     return IstariPlatform.from_env()

@@ -1455,14 +1455,33 @@ class IstariPlatform:
 
     @classmethod
     def from_env(cls, dotenv_path: str = ".env") -> IstariPlatform:
-        """Create from ``ISTARI_ENVIRONMENT_URL`` and ``ISTARI_PAT`` env vars."""
+        """Create from ``ISTARI_REGISTRY_URL`` and ``ISTARI_PERSONAL_ACCESS_TOKEN``.
+
+        These are the same variable names used by the official Istari Digital
+        Python client documentation.  Set them in a ``.env`` file next to your
+        script/notebook, or export them in your shell.
+        """
         from dotenv import load_dotenv
         from istari_digital_client.configuration import Configuration
 
         load_dotenv(dotenv_path)
+        registry_url = os.getenv("ISTARI_REGISTRY_URL")
+        token = os.getenv("ISTARI_PERSONAL_ACCESS_TOKEN")
+        if not registry_url:
+            raise RuntimeError(
+                "ISTARI_REGISTRY_URL is not set. In the platform UI open "
+                "Settings > Developer Settings, copy the Registry URL, and "
+                "export it (or write it into a .env file)."
+            )
+        if not token:
+            raise RuntimeError(
+                "ISTARI_PERSONAL_ACCESS_TOKEN is not set. Create one in "
+                "Settings > Developer Settings > Personal Access Tokens, "
+                "and export it (or write it into a .env file)."
+            )
         config = Configuration(
-            registry_url=os.getenv("ISTARI_ENVIRONMENT_URL", "https://fileservice-v2.stage.istari.app"),
-            registry_auth_token=os.getenv("ISTARI_PAT"),
+            registry_url=registry_url,
+            registry_auth_token=token,
         )
         return cls(IstariClient(config))
 
