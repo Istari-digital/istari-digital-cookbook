@@ -2,6 +2,8 @@
 
 Entity-oriented wrapper over the [Istari Digital](https://www.istaridigital.com/) Python client. Exposes systems, configurations, models, jobs, and artifacts as chainable objects instead of flat SDK calls.
 
+> **Status**: an opinionated, higher-level layer maintained alongside the official [`istari-digital-client`](https://docs.istaridigital.com/developers/SDK/api_reference/). It is intended to make common workflows shorter and safer, but it is not the officially supported SDK -- for production integrations, the core client remains the source of truth.
+
 ## Install
 
 ```bash
@@ -51,23 +53,25 @@ IstariPlatform                (entry point)
   +-- TrackedFileSet           (builder for new configurations)
   |     +-- .add_file() / .add_product_as_model() / .add_revision()  -> self
   |     +-- .save(name=None)         -> ConfigurationView
-  +-- ModelView               (wraps Model)
-  |     +-- .get_jobs()              -> list[JobView]
-  |     +-- .submit_job()            -> JobView
-  |     +-- .run_job()               -> JobView (submit + wait)
+  +-- ResourceView            (unified wrapper over any Resource: Artifact, Model, ...)
+  |     +-- .name / .filename / .mime / .file_id / .revision_id
+  |     +-- .revision / .latest_revision / .pin(rev) / .unpinned
+  |     +-- .read_bytes() / .read_text() / .download(dest)
+  |     +-- .as_source()             -> NewSource (chain into next job)
+  |     +-- .promote()               -> ModelView (tag: "promoted_from")
+  |     +-- .get_lineage()           -> LineageNode
+  |     +-- .submit_job() / .run_job()  (auto-promotes Artifact resources)
+  +-- ModelView               (ResourceView specialised for Models)
+  |     +-- .current_revision_id / .pinned_revision_id
+  |     +-- .get_jobs() / .get_configurations()
   +-- JobView                 (wraps Job)
   |     +-- .revision                -> FileRevision (job's output revision)
-  |     +-- .get_products()          -> list[ProductView]   (race-safe)
-  |     +-- .find_product()          -> ProductView | None
-  |     +-- .wait()                  -> self (chainable)
-  |     +-- .on_success()            -> self or raise
-  +-- ProductView             (wraps Product = (revision, resource) pair)
-  |     +-- .revision                -> FileRevision (exact rev the job wrote)
-  |     +-- .resource                -> ResourceView | None
-  |     +-- .download() / .read_bytes() / .read_text()
-  |     +-- .promote()               -> ModelView
-  +-- ResourceView            (wraps Resource: Artifact, Model, Job, ...)
-        +-- .id / .type / .raw
+  |     +-- .get_products()          -> list[ResourceView]  (each pinned to a product's revision)
+  |     +-- .find_product()          -> ResourceView | None  (pinned)
+  |     +-- .wait() / .on_success()
+  +-- LineageNode             (one revision in a backward lineage tree)
+        +-- .step 'upload' | 'job_run' | 'promotion' | 'derived'
+        +-- .parents  / .walk() / .print_tree()
 ```
 
 ## Usage
@@ -75,7 +79,7 @@ IstariPlatform                (entry point)
 All examples assume:
 
 ```python
-from istari_experimental import IstariPlatform, JobDefinition
+from istari_fluent import IstariPlatform, JobDefinition
 
 platform = IstariPlatform.from_env()  # reads .env
 ```
@@ -133,11 +137,10 @@ job = model.submit_job(JobDefinition(
 
 job.wait(timeout=600)
 
-# Each ProductView points to the exact FileRevision the agent wrote
+# Each product is a ResourceView pinned to the exact FileRevision the agent wrote
 # (race-safe: unaffected by any later jobs that touch the same files).
 for p in job.get_products():
-    rev = p.revision
-    print(p.name, p.mime, "rev=", rev.id, "file=", rev.file_id)
+    print(p.name, p.mime, "rev=", p.revision_id, "file=", p.file_id)
 ```
 
 ### Download a product
@@ -151,24 +154,53 @@ report.download("local_report.json")
 data = report.read_text()
 ```
 
-### Promote a product to a model (job chaining)
+### Run a job on an artifact (auto-promotion)
 
-Take a product written by a job, promote it to a standalone model with source
-traceability, and add it to the configuration so a subsequent job can run on it.
+`run_job` / `submit_job` dispatch on resource type. Models go directly to the
+platform; Artifacts are first auto-promoted to a Model (with the lineage edge
+labelled `"promoted_from"`), then the job runs on the promoted Model.
 
 ```python
-job = platform.get_job("job-uuid")
+# Model -- direct
+model = platform.find_model(name="MQ-99 Berserker SFR SYSML Model")
+job = model.run_job(JobDefinition(function="@istari:extract", tool_name="cameo"))
+
+# Artifact -- auto-promoted under the hood
+artifact = job.find_product(filename="extraction_output.json")   # pinned ResourceView
+next_job = artifact.run_job(JobDefinition(function="@sysml:transform", tool_name="..."))
+```
+
+### Chain jobs via `as_source` (no promotion)
+
+When you only need to feed a product as a source into another job (rather than
+running the job *on* it), use `as_source()` -- no extra Model is created:
+
+```python
+src = job.find_product(filename="named_cells.json").as_source()
+next_job = model.submit_job(JobDefinition(..., sources=[src]))
+```
+
+### Explicit promotion
+
+Use `promote()` when you want a standalone, reusable Model instead of a
+one-shot auto-promotion:
+
+```python
 output = job.find_product(name="extraction_output.json")
+new_cfg = cfg.add_product_as_model(output, display_name="Extracted Data").save()
 
-# Promote and add to config in one chain
-new_cfg = cfg.add_product_as_model(
-    output,
-    display_name="Extracted Data",
-).save()
-
-# Or promote separately and submit next job
+# Or promote, then do anything a Model can do
 model = output.promote(display_name="Extracted Data")
 next_job = model.submit_job(JobDefinition(...))
+```
+
+### Trace how something was created
+
+```python
+model.get_lineage().print_tree()
+# - Model 'extracted.json' (rev=...)   step=promotion
+#   - Artifact 'extracted.json' (rev=...)   step=job_run [via input]
+#     - Model 'source.mdzip' (rev=...)   step=upload
 ```
 
 ### List all configurations of a system
@@ -211,8 +243,8 @@ The integration suite uploads `Group3-UAS-Requirements.xlsx`, runs `open_spreads
 ## Project layout
 
 ```
-experimental/
-  istari_experimental/   package source (istari_utils.py, __init__.py)
+fluent/
+  istari_fluent/         package source (istari_utils.py, __init__.py)
   tests/                 pytest suite
   pyproject.toml         project and build config
   .env.example           environment variable template

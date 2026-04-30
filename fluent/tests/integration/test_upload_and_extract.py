@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from istari_experimental import IstariPlatform, JobDefinition
+from istari_fluent import IstariPlatform, JobDefinition
 
 pytestmark = pytest.mark.integration
 

@@ -5,7 +5,7 @@ import os
 import pytest
 from dotenv import load_dotenv
 
-from istari_experimental import IstariPlatform
+from istari_fluent import IstariPlatform
 
 
 @pytest.fixture(scope="session")

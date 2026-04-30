@@ -1,15 +1,15 @@
-"""Istari experimental package - utilities and workflows."""
+"""Istari fluent client - opinionated, chainable wrapper over istari-digital-client."""
 
-from istari_experimental.istari_utils import (
+from istari_fluent.istari_utils import (
     IstariPlatform,
     SystemView,
     SnapshotView,
     ConfigurationView,
     TrackedFileSet,
+    ResourceView,
     ModelView,
     JobView,
-    ProductView,
-    ResourceView,
+    LineageNode,
     JobDefinition,
 )
 
@@ -19,9 +19,9 @@ __all__ = [
     "SnapshotView",
     "ConfigurationView",
     "TrackedFileSet",
+    "ResourceView",
     "ModelView",
     "JobView",
-    "ProductView",
-    "ResourceView",
+    "LineageNode",
     "JobDefinition",
 ]

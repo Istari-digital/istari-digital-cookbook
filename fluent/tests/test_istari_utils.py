@@ -1,6 +1,6 @@
-"""Tests for istari_experimental.istari_utils."""
+"""Tests for istari_fluent.istari_utils."""
 
-from istari_experimental.istari_utils import _paginate_manually, _next_config_name
+from istari_fluent.istari_utils import _paginate_manually, _next_config_name
 
 
 class _MockPage:

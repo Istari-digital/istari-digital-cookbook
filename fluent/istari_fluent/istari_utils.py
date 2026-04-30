@@ -28,23 +28,33 @@ Entity hierarchy
       |     +-- .status / .created / .function_name
       |     +-- .model_revision_id
       |     +-- .revision              -> FileRevision (latest job-output revision)
-      |     +-- .get_products()        -> list[ProductView]
-      |     +-- .find_product()        -> ProductView | None
+      |     +-- .get_products()        -> list[ResourceView]  (each pinned to the product's revision)
+      |     +-- .find_product()        -> ResourceView | None  (pinned)
       |     +-- .wait()                -> self (chainable)
       |     +-- .on_success()          -> self or raise
       |     +-- .completed / .failed   bool properties
-      +-- ProductView         (wraps Product = race-safe (revision, resource) pair)
-      |     +-- .revision              -> FileRevision  (exact rev the job wrote)
-      |     +-- .resource              -> ResourceView | None  (owning entity)
+      +-- ResourceView        (unified wrapper for Artifact / Model / Job / ...)
+      |     +-- .id / .type / .raw / .file / .latest_revision
+      |     +-- .revision              -> FileRevision  (pinned if set, else latest)
+      |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
       |     +-- .name / .filename / .mime / .file_id / .revision_id
       |     +-- .read_bytes() / .read_text() / .download(dest)
-      |     +-- .promote()             -> ModelView  (revision-to-model)
-      +-- ResourceView        (wraps a Resource: Artifact, Model, Job, ...)
-            +-- .id / .type / .raw
+      |     +-- .as_source()           -> NewSource  (chain into next job, no API call)
+      |     +-- .promote()             -> ModelView  (revision-to-model, tagged 'promoted_from')
+      |     +-- .get_lineage()         -> LineageNode  (backward provenance)
+      |     +-- .submit_job(defn)      -> JobView  (auto-promotes Artifact resources)
+      |     +-- .run_job(defn)         -> JobView  (submit + wait + on_success)
+      +-- ModelView           (ResourceView specialised for Model; adds tracked-file context)
+      |     +-- .current_revision_id / .pinned_revision_id
+      |     +-- .get_jobs() / .get_configurations()
+      +-- LineageNode         (one revision in a backward lineage tree)
+            +-- .step          'upload' | 'job_run' | 'promotion' | 'derived'
+            +-- .parents       list[LineageNode]  (recursive)
+            +-- .walk() / .print_tree()
 
 Quick start
 -----------
-    from istari_experimental import IstariPlatform
+    from istari_fluent import IstariPlatform
 
     platform = IstariPlatform.from_env()
 
@@ -65,6 +75,13 @@ Quick start
         rev = p.revision                  # exact revision the agent wrote
         print(rev.name, rev.file_id, rev.id)
 
+    # Chain jobs: feed a product from job 1 into job 2 as a source
+    src = job.find_product(filename="named_cells.json").as_source()
+    job2 = model.submit_job(JobDefinition(..., sources=[src]))
+
+    # Trace how a model was created (upload / job_run / promotion / derived)
+    model.get_lineage().print_tree()
+
     # Upload a model and add it to the baseline configuration
     model = platform.upload_model("model.mdzip", external_id="ext-123")
     cfg = system.baseline.configuration
@@ -80,13 +97,14 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 from istari_digital_client.client import Client as IstariClient
 from istari_digital_client.v2.models import (
-    Model, File, FileRevision, Product, System, Job,
+    Model, File, FileRevision, System, Job,
     Snapshot, SystemConfiguration, TrackedFile,
     NewTrackedFile, NewSystemConfiguration, TrackedFileSpecifierType,
     UpdateTag,
@@ -185,26 +203,257 @@ class JobDefinition(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# ResourceView  --  generic wrapper around a Resource (Artifact/Model/Job/...)
+# LineageNode  --  one revision in a backward lineage chain
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LineageNode:
+    """One revision in a backward-pointing lineage tree.
+
+    The root represents the resource's current revision; ``parents`` are the
+    revisions that fed into it (its ``sources``), recursively, until either
+    an upload (no sources) or ``max_depth`` is reached.
+
+    ``step`` classifies how this revision came to exist:
+        - ``upload``    : no sources -- a fresh user upload (root of a chain)
+        - ``job_run``   : at least one source has resource_type == "Job"
+        - ``promotion`` : at least one source has relationship_identifier ==
+                          "promoted_from" (the marker that ``ResourceView.promote``
+                          writes)
+        - ``derived``   : has sources but doesn't match the above
+
+    ``relationship_to_child`` is the ``Source.relationship_identifier`` from
+    the perspective of the *child* node (i.e. how the child labels its link
+    back to this parent).  ``None`` on the root.
+
+    Inspect with ``print_tree()`` or iterate with ``walk()``.
+    """
+    revision_id: str
+    file_id: str | None
+    name: str | None
+    display_name: str | None
+    created: datetime | None
+    resource_type: str | None
+    resource_id: str | None
+    step: str
+    relationship_to_child: str | None
+    parents: list[LineageNode] = field(default_factory=list)
+    truncated: bool = False
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.name or self.revision_id
+
+    def __repr__(self) -> str:
+        res = f"{self.resource_type}" if self.resource_type else "?"
+        return (
+            f"LineageNode(step={self.step!r}, {res}, "
+            f"name={self.label!r}, rev={self.revision_id})"
+        )
+
+    def walk(self) -> Iterator[LineageNode]:
+        """Depth-first iteration over this node and all ancestors."""
+        yield self
+        for p in self.parents:
+            yield from p.walk()
+
+    def print_tree(self, indent: int = 0, _is_root: bool = True) -> None:
+        """Pretty-print the lineage tree to stdout (root first, parents below)."""
+        prefix = "  " * indent
+        res = self.resource_type or "Revision"
+        when = self.created.strftime("%Y-%m-%d %H:%M") if self.created else "?"
+        edge = "" if _is_root else f"  [via {self.relationship_to_child or '-'}]"
+        print(f"{prefix}- {res} {self.label!r} (rev={self.revision_id}){edge}")
+        print(f"{prefix}    step={self.step}  created={when}")
+        if self.truncated:
+            print(f"{prefix}    ... (truncated: max_depth reached)")
+        for p in self.parents:
+            p.print_tree(indent + 1, _is_root=False)
+
+
+def _classify_step(rev: FileRevision) -> str:
+    """Classify how a FileRevision came into existence from its sources."""
+    sources = rev.sources or []
+    if not sources:
+        return "upload"
+    for s in sources:
+        if s.relationship_identifier == "promoted_from":
+            return "promotion"
+    for s in sources:
+        if s.resource_type == "Job":
+            return "job_run"
+    return "derived"
+
+
+def _build_lineage_node(
+    client: IstariClient,
+    rev: FileRevision,
+    *,
+    relationship_to_child: str | None,
+    max_depth: int,
+    depth: int,
+    cache: dict[str, LineageNode],
+) -> LineageNode:
+    """Recursively build a LineageNode tree from a FileRevision.
+
+    ``cache`` memoizes by revision id so a diamond-shaped DAG is built once.
+    Stops descending at ``max_depth``; deeper nodes are returned with
+    ``truncated=True`` and no parents.
+    """
+    if rev.id in cache:
+        cached = cache[rev.id]
+        return cached
+
+    resource_type = None
+    resource_id = None
+    if rev.file_id:
+        try:
+            f = client.get_file(rev.file_id)
+            resource_type = getattr(f, "resource_type", None)
+            resource_id = getattr(f, "resource_id", None)
+        except Exception:
+            pass
+
+    node = LineageNode(
+        revision_id=rev.id,
+        file_id=rev.file_id,
+        name=rev.name,
+        display_name=rev.display_name,
+        created=rev.created,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        step=_classify_step(rev),
+        relationship_to_child=relationship_to_child,
+        parents=[],
+        truncated=False,
+    )
+    cache[rev.id] = node
+
+    if depth >= max_depth:
+        node.truncated = bool(rev.sources)
+        return node
+
+    for src in rev.sources or []:
+        try:
+            parent_rev = client.get_revision(src.revision_id)
+        except Exception:
+            continue
+        parent = _build_lineage_node(
+            client,
+            parent_rev,
+            relationship_to_child=src.relationship_identifier,
+            max_depth=max_depth,
+            depth=depth + 1,
+            cache=cache,
+        )
+        node.parents.append(parent)
+
+    return node
+
+
+# ---------------------------------------------------------------------------
+# Shared promotion helper
+# ---------------------------------------------------------------------------
+
+def _promote_revision_to_model(
+    client: IstariClient,
+    rev: FileRevision,
+    *,
+    display_name: str | None = None,
+    filename: str | None = None,
+    external_identifier: str | None = None,
+    relationship_identifier: str | None = "promoted_from",
+) -> Model:
+    """Download a FileRevision and re-upload it as a standalone Model.
+
+    The new Model records ``rev`` as a source, preserving provenance.  Used
+    both by explicit ``ResourceView.promote()`` and by the auto-promotion
+    performed when running a job on an Artifact resource.
+    """
+    from istari_digital_client.v2.models.new_source import NewSource
+
+    content = client.read_contents(token=rev.content_token)
+    upload_name = filename or rev.name or rev.id
+    upload_path = Path(upload_name)
+    suffix = upload_path.suffix or rev.suffix or ""
+
+    if display_name:
+        name = display_name
+    elif filename:
+        name = upload_path.stem
+    else:
+        name = rev.display_name or rev.name or rev.id
+    if suffix and name.endswith(suffix):
+        name = name[: -len(suffix)]
+
+    tmp_dir = tempfile.mkdtemp(prefix="istari_promote_")
+    tmp_path = os.path.join(tmp_dir, upload_name)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        model = client.add_model(
+            path=tmp_path,
+            display_name=name,
+            external_identifier=external_identifier,
+            sources=[NewSource(
+                revision_id=rev.id,
+                relationship_identifier=relationship_identifier,
+            )],
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        if os.path.isdir(tmp_dir):
+            os.rmdir(tmp_dir)
+    return model
+
+
+# ---------------------------------------------------------------------------
+# ResourceView  --  unified wrapper over any Resource (Artifact/Model/Job/...)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ResourceView:
-    """Lightweight wrapper around an SDK ``Resource`` (Artifact, Model, Job, ...).
+    """Wraps a platform Resource (Artifact, Model, Job, ...) with an optional
+    revision pin.
 
-    Returned by ``ProductView.resource`` to expose the entity that owns a
-    product's revision without committing to a specific concrete type.
+    A ``ResourceView`` plays two roles depending on whether ``_pinned_revision``
+    is set:
 
-        product = job.get_products()[0]
-        res = product.resource           # ResourceView | None
-        res.type                         # 'Artifact', 'Model', ...
-        res.raw                          # the underlying SDK model
+    - **Unpinned** (default): represents the resource in its current state.
+      ``revision`` returns the latest revision of the resource's file.
+    - **Pinned**: represents the resource *as of* a specific revision.  This
+      is how products behave -- every ``ResourceView`` returned by
+      ``JobView.get_products()`` carries the exact revision the agent wrote,
+      even if newer revisions land later (race-safe).
+
+        # Unpinned -- current state
+        artifact = platform.get_resource("Artifact", "art-1")
+        artifact.name, artifact.read_bytes()      # from latest revision
+
+        # Pinned -- the output of a specific job
+        report = job.find_product(filename="report.json")   # pinned ResourceView
+        report.read_text()                        # the bytes that job wrote
+        report.as_source()                        # NewSource for chaining
+
+    Running a job:
+
+        # On a Model -- direct
+        model.run_job(definition)
+
+        # On an Artifact -- auto-promoted to a Model first
+        artifact.run_job(definition)
     """
     _resource: Any = field(repr=False)
     _client: IstariClient = field(repr=False)
+    _pinned_revision: FileRevision | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
-        return f"Resource(type={self.type!r}, id={self.id})"
+        mime = self.mime or "?"
+        pin = f", pinned_rev={self._pinned_revision.id}" if self._pinned_revision else ""
+        return f"{self.type}({self.name!r}, id={self.id}, mime={mime}{pin})"
+
+    # -- identity -----------------------------------------------------------
 
     @property
     def id(self) -> str | None:
@@ -212,188 +461,284 @@ class ResourceView:
 
     @property
     def type(self) -> str:
+        """Concrete resource type name (e.g. ``'Model'``, ``'Artifact'``, ``'Job'``)."""
         return type(self._resource).__name__
 
     @property
     def raw(self) -> Any:
         return self._resource
 
-
-# ---------------------------------------------------------------------------
-# ProductView  --  wraps a Product (race-safe revision + resource pair)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ProductView:
-    """Wraps a ``Product`` -- a derived output produced by a job (or any op).
-
-    A Product captures the exact ``FileRevision`` that was written and the
-    ``Resource`` (Artifact, Model, ...) that owns it.  This is *race-safe*:
-    even if subsequent jobs add new revisions to the same artifact file,
-    a Product still points to the revision created by the original job.
-
-        for p in job.get_products():
-            print(p.name, p.revision.id)
-        report = job.find_product(name="report.json")
-        report.download("local_report.json")
-    """
-    _product: Product = field(repr=False)
-    _client: IstariClient = field(repr=False)
-    _revision: FileRevision | None = field(default=None, repr=False)
-
-    def __repr__(self) -> str:
-        mime = self.mime or "?"
-        return (
-            f"Product({self.name!r}, mime={mime!r}, "
-            f"resource={self.resource_type}/{self.resource_id}, rev={self.revision_id})"
-        )
-
-    # -- product fields -----------------------------------------------------
-
     @property
-    def raw(self) -> Product:
-        return self._product
-
-    @property
-    def revision_id(self) -> str:
-        return self._product.revision_id
+    def file(self) -> File | None:
+        """The ``File`` backing this resource (if any)."""
+        return getattr(self._resource, "file", None)
 
     @property
     def file_id(self) -> str | None:
-        return self._product.file_id
+        f = self.file
+        return f.id if f else None
+
+    # -- revision handling --------------------------------------------------
 
     @property
-    def resource_type(self) -> str | None:
-        return self._product.resource_type
+    def latest_revision(self) -> FileRevision | None:
+        """Most recent ``FileRevision`` of the resource's file."""
+        f = self.file
+        if f and f.revisions:
+            return f.revisions[-1]
+        return None
 
     @property
-    def resource_id(self) -> str | None:
-        return self._product.resource_id
+    def revision(self) -> FileRevision | None:
+        """The effective revision: pinned if set, else latest."""
+        return self._pinned_revision or self.latest_revision
 
     @property
-    def relationship_identifier(self) -> str | None:
-        return self._product.relationship_identifier
-
-    # -- lazy lookups -------------------------------------------------------
-
-    @property
-    def revision(self) -> FileRevision:
-        """The exact ``FileRevision`` this product points to (race-safe).
-
-        Fetched lazily on first access and cached on this view.
-        """
-        if self._revision is None:
-            self._revision = self._client.get_revision(self._product.revision_id)
-        return self._revision
+    def revision_id(self) -> str | None:
+        rev = self.revision
+        return rev.id if rev else None
 
     @property
-    def resource(self) -> ResourceView | None:
-        """The owning ``Resource`` (Artifact, Model, ...) wrapped in a view."""
-        if not self._product.resource_type or not self._product.resource_id:
-            return None
-        try:
-            r = self._client.get_resource(self._product.resource_type, self._product.resource_id)
-        except Exception:
-            return None
-        return ResourceView(_resource=r, _client=self._client) if r else None
+    def is_pinned(self) -> bool:
+        return self._pinned_revision is not None
 
-    # -- revision-derived convenience ---------------------------------------
+    def pin(self, revision: FileRevision | str) -> ResourceView:
+        """Return a new view pinned to a specific revision (fetches if given an id)."""
+        if isinstance(revision, str):
+            revision = self._client.get_revision(revision)
+        return type(self)(
+            _resource=self._resource,
+            _client=self._client,
+            _pinned_revision=revision,
+        )
 
     @property
-    def id(self) -> str | None:
-        """The owning resource id (e.g. Artifact id), falling back to revision id."""
-        return self._product.resource_id or self._product.revision_id
+    def unpinned(self) -> ResourceView:
+        """Return a copy of this view without the revision pin."""
+        return type(self)(
+            _resource=self._resource,
+            _client=self._client,
+            _pinned_revision=None,
+        )
+
+    # -- content (operates on self.revision) --------------------------------
 
     @property
     def name(self) -> str:
         rev = self.revision
-        return rev.display_name or rev.name or self._product.revision_id
+        if rev:
+            return rev.display_name or rev.name or rev.id
+        return self.id or ""
 
     @property
-    def filename(self) -> str:
-        """Original filename of the produced revision (with extension)."""
+    def filename(self) -> str | None:
+        """Filename of the effective revision, including extension."""
         rev = self.revision
-        return rev.name or self._product.revision_id
+        return rev.name if rev else None
 
     @property
     def mime(self) -> str | None:
-        return self.revision.mime
-
-    # -- content access -----------------------------------------------------
+        rev = self.revision
+        return rev.mime if rev else None
 
     def read_bytes(self) -> bytes:
-        """Return the product's content as raw bytes."""
-        return self._client.read_contents(token=self.revision.content_token)
+        """Return the effective revision's content as raw bytes."""
+        rev = self.revision
+        if rev is None:
+            raise ValueError(f"{self.type} {self.id} has no revision to read")
+        return self._client.read_contents(token=rev.content_token)
 
     def read_text(self, encoding: str = "utf-8") -> str:
-        """Return the product's content as decoded text."""
         return self.read_bytes().decode(encoding)
 
     def download(self, dest: str | Path) -> Path:
-        """Download the product's content to a local path.
+        """Download the effective revision's content to a local path.
 
         *dest* can be a file path or a directory.  When a directory is given
-        the product's original filename is used.
+        the revision's original filename is used.
         """
         dest = Path(dest)
         if dest.is_dir():
-            dest = dest / self.filename
+            dest = dest / (self.filename or self.id or "download")
         dest.write_bytes(self.read_bytes())
         return dest
 
-    # -- mutations ----------------------------------------------------------
+    # -- provenance / chaining ---------------------------------------------
+
+    def as_source(self, relationship_identifier: str | None = None) -> Any:
+        """Return a ``NewSource`` pointing to this view's effective revision.
+
+        Use to chain operations: feed a product from job N into job N+1 (or
+        into a new model/artifact) as a source.  Uses ``self.revision.id`` so
+        pinned views produce race-safe sources.
+
+            sources = [job1.find_product(filename="named_cells.json").as_source()]
+            job2 = model.submit_job(JobDefinition(..., sources=sources))
+        """
+        from istari_digital_client.v2.models.new_source import NewSource
+        rev = self.revision
+        if rev is None:
+            raise ValueError(f"{self.type} {self.id} has no revision to reference")
+        return NewSource(
+            revision_id=rev.id,
+            relationship_identifier=relationship_identifier,
+        )
+
+    def get_lineage(self, max_depth: int = 10) -> LineageNode | None:
+        """Return the backward lineage tree rooted at this view's effective revision.
+
+        Walks ``revision.sources`` recursively, classifying each step as
+        ``upload``, ``job_run``, ``promotion``, or ``derived``.  Returns
+        ``None`` if the resource has no revisions.
+
+        Pinned views trace the lineage of the exact revision they point to;
+        unpinned views trace the latest revision.
+        """
+        rev = self.revision
+        if rev is None:
+            return None
+        return _build_lineage_node(
+            self._client, rev,
+            relationship_to_child=None,
+            max_depth=max_depth,
+            depth=0,
+            cache={},
+        )
 
     def promote(
         self,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
+        relationship_identifier: str | None = "promoted_from",
     ) -> ModelView:
-        """Promote this product's revision to a standalone model.
+        """Promote this view's effective revision to a standalone Model.
+
+        The new Model records the source revision so ``get_lineage()`` can
+        classify the step as a promotion.
 
         *display_name* sets the human-readable model name (defaults to the
-        product's display name).  *filename* sets the file name stored on
-        the platform (defaults to the product's original filename, e.g.
-        ``blocks.json``).  The two are independent -- ``filename`` controls
-        what ``find_model(filename=...)`` matches against.
+        revision's display name).  *filename* controls the stored file name
+        (defaults to the revision's original filename).
 
-        The new model records the product's revision as a *source*, preserving
-        the provenance chain: ``Original Model -> Job -> Product -> Model``.
+        ``relationship_identifier`` defaults to ``"promoted_from"``; pass
+        ``None`` to omit the label.
         """
-        from istari_digital_client.v2.models.new_source import NewSource
-
         rev = self.revision
-        content = self._client.read_contents(token=rev.content_token)
-        upload_name = filename or self.filename
-        upload_path = Path(upload_name)
-        suffix = upload_path.suffix or rev.suffix or ""
+        if rev is None:
+            raise ValueError(f"{self.type} {self.id} has no revision to promote")
+        model = _promote_revision_to_model(
+            self._client, rev,
+            display_name=display_name,
+            filename=filename,
+            external_identifier=external_identifier,
+            relationship_identifier=relationship_identifier,
+        )
+        return ModelView(_resource=model, _client=self._client)
 
-        if display_name:
-            name = display_name
-        elif filename:
-            name = upload_path.stem
-        else:
-            name = self.name
-        if suffix and name.endswith(suffix):
-            name = name[: -len(suffix)]
+    # -- execution ----------------------------------------------------------
 
-        tmp_dir = tempfile.mkdtemp(prefix="istari_promote_")
-        tmp_path = os.path.join(tmp_dir, upload_name)
-        try:
-            with open(tmp_path, "wb") as f:
-                f.write(content)
-            model = self._client.add_model(
-                path=tmp_path,
-                display_name=name,
-                external_identifier=external_identifier,
-                sources=[NewSource(revision_id=rev.id)],
+    def submit_job(
+        self,
+        definition: JobDefinition,
+        save_input: bool = False,
+        save_input_as_revision: bool = False,
+        sources: list[Any] | None = None,
+        promotion_relationship: str | None = "promoted_from",
+    ) -> JobView:
+        """Submit a job against this resource and return a ``JobView`` (async).
+
+        Dispatch rules:
+            - Model    -> submit directly (the platform accepts model_id)
+            - Artifact -> auto-promote the effective revision to a Model,
+                          then submit.  The promotion creates a new Model
+                          with ``relationship_identifier=promotion_relationship``
+                          so ``get_lineage()`` recognises it.
+            - Other    -> raises ``TypeError``.
+
+        ``sources`` -- optional list of ``NewSource`` objects (use
+        ``ResourceView.as_source()`` to build them) attached to the job so the
+        platform records the provenance link.
+
+        ``save_input_as_revision`` is incompatible with the Artifact path
+        (each auto-promoted model is single-use) and raises ``ValueError``.
+        """
+        rtype = self.type
+        if rtype == "Model":
+            job = _submit_job_impl(
+                self._client, self.id, definition,
+                save_input=save_input,
+                save_input_as_revision=save_input_as_revision,
+                extra_sources=sources,
             )
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            if os.path.isdir(tmp_dir):
-                os.rmdir(tmp_dir)
-        return ModelView(_model=model, _client=self._client)
+            return JobView(_job=job, _client=self._client)
+
+        if rtype == "Artifact":
+            if save_input_as_revision:
+                raise ValueError(
+                    "save_input_as_revision is not supported when running a job "
+                    "on an Artifact (the auto-promoted model is single-use). "
+                    "Promote explicitly first if you need this behaviour."
+                )
+            rev = self.revision
+            if rev is None:
+                raise ValueError(f"Artifact {self.id} has no revision to promote")
+            promoted = _promote_revision_to_model(
+                self._client, rev,
+                relationship_identifier=promotion_relationship,
+            )
+            job = _submit_job_impl(
+                self._client, promoted.id, definition,
+                save_input=save_input,
+                save_input_as_revision=False,
+                extra_sources=sources,
+            )
+            return JobView(_job=job, _client=self._client)
+
+        raise TypeError(
+            f"Cannot run a job on resource of type {rtype!r}; "
+            "only 'Model' and 'Artifact' are supported."
+        )
+
+    def run_job(
+        self,
+        definition: JobDefinition,
+        timeout: int = 3600,
+        save_input: bool = False,
+        save_input_as_revision: bool = False,
+        sources: list[Any] | None = None,
+        poll_interval: int = 5,
+        promotion_relationship: str | None = "promoted_from",
+    ) -> JobView:
+        """Submit, wait, and return the completed ``JobView``.
+
+        Same dispatch rules as ``submit_job``.  Raises ``RuntimeError`` if the
+        job fails or times out.
+        """
+        jv = self.submit_job(
+            definition,
+            save_input=save_input,
+            save_input_as_revision=save_input_as_revision,
+            sources=sources,
+            promotion_relationship=promotion_relationship,
+        )
+        return jv.wait(timeout=timeout, poll_interval=poll_interval).on_success()
+
+
+def _make_resource_view(
+    resource: Any,
+    client: IstariClient,
+    *,
+    pinned_revision: FileRevision | None = None,
+) -> ResourceView:
+    """Factory: return a ``ModelView`` for Model resources, else ``ResourceView``.
+
+    Used wherever we turn an SDK resource object into a view; keeps call sites
+    from having to type-check the resource themselves.
+    """
+    if isinstance(resource, Model):
+        return ModelView(_resource=resource, _client=client, _pinned_revision=pinned_revision)
+    return ResourceView(_resource=resource, _client=client, _pinned_revision=pinned_revision)
 
 
 # ---------------------------------------------------------------------------
@@ -521,13 +866,13 @@ class JobView:
             return self._job.file.revisions[-1]
         return None
 
-    def get_products(self, *, resource_type: str | None = None) -> list[ProductView]:
-        """Return products generated by this job (race-safe).
+    def get_products(self, *, resource_type: str | None = None) -> list[ResourceView]:
+        """Return products generated by this job as pinned ``ResourceView``s.
 
-        Reads ``job.revision.products`` -- each ``Product`` points to the
-        exact ``FileRevision`` the agent wrote, so concurrent jobs that add
-        new revisions to the same artifact files cannot affect what this
-        method returns.
+        Reads ``job.revision.products`` -- each ``Product`` points to the exact
+        ``FileRevision`` the agent wrote.  Each returned view is **pinned** to
+        that revision so the result stays race-safe even after newer revisions
+        land on the same artifact file.
 
         ``resource_type`` (e.g. ``"Artifact"``) filters by the owning resource.
         """
@@ -539,7 +884,23 @@ class JobView:
         products = rev.products
         if resource_type:
             products = [p for p in products if p.resource_type == resource_type]
-        return [ProductView(_product=p, _client=self._client) for p in products]
+
+        views: list[ResourceView] = []
+        for p in products:
+            if not p.resource_type or not p.resource_id:
+                continue
+            try:
+                r = self._client.get_resource(p.resource_type, p.resource_id)
+            except Exception:
+                continue
+            if r is None:
+                continue
+            try:
+                pinned_rev = self._client.get_revision(p.revision_id)
+            except Exception:
+                pinned_rev = None
+            views.append(_make_resource_view(r, self._client, pinned_revision=pinned_rev))
+        return views
 
     def find_product(
         self,
@@ -547,11 +908,13 @@ class JobView:
         name: str | None = None,
         filename: str | None = None,
         resource_type: str | None = None,
-    ) -> ProductView | None:
+    ) -> ResourceView | None:
         """Find a product by display name, filename, and/or resource type.
 
-        ``name`` matches against display_name or rev.name (like ``ProductView.name``).
-        ``filename`` matches against the revision's actual filename (``rev.name``).
+        Returns a pinned ``ResourceView`` (see ``get_products``), or ``None``.
+
+        ``name`` matches against the revision's display name or file name.
+        ``filename`` matches the revision's actual filename (``rev.name``).
         ``resource_type`` restricts the search to e.g. ``"Artifact"``.
         """
         if not name and not filename:
@@ -610,23 +973,24 @@ class JobView:
 
 
 # ---------------------------------------------------------------------------
-# ModelView
+# ModelView  --  ResourceView specialised for Model resources
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ModelView:
+class ModelView(ResourceView):
     """
-    Wraps a Model with optional tracked-file context.
+    ``ResourceView`` specialisation for Model resources.
+
+    Adds Model-only affordances -- tracked-file context, job listing, and
+    configuration membership -- on top of the generic resource API (content
+    access, lineage, promotion, job submission).
 
         model = platform.find_model(name="My Model")
         model.name                         # display name from latest revision
         model.current_revision_id          # from TrackedFile if available
         jobs = model.get_jobs()
         job  = model.submit_job(definition)
-        id, status, arts = model.run_job(definition, timeout=600)
     """
-    _model: Model = field(repr=False)
-    _client: IstariClient = field(repr=False)
     _tracked_file: TrackedFile | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
@@ -643,36 +1007,19 @@ class ModelView:
     __str__ = __repr__
 
     @property
-    def id(self) -> str:
-        return self._model.id
-
-    @property
-    def raw(self) -> Model:
-        return self._model
-
-    @property
-    def name(self) -> str:
-        return _model_display_name(self._model)
-
-    @property
-    def filename(self) -> str | None:
-        """Actual file name including extension (e.g. ``'model.mdzip'``)."""
-        rev = _latest_revision(self._model)
-        return rev.name if rev else None
-
-    @property
-    def file_id(self) -> str | None:
-        return self._model.file.id if self._model.file else None
-
-    @property
     def current_revision_id(self) -> str | None:
+        """Revision this Model is currently pinned to via a TrackedFile, if any.
+
+        Falls back to the latest revision when no TrackedFile context is set.
+        """
         if self._tracked_file:
             return self._tracked_file.current_file_revision_id
-        rev = _latest_revision(self._model)
+        rev = self.latest_revision
         return rev.id if rev else None
 
     @property
     def pinned_revision_id(self) -> str | None:
+        """Tracked-file pinned revision id, if this view carries TrackedFile context."""
         if self._tracked_file:
             return self._tracked_file.pinned_file_revision_id
         return None
@@ -680,14 +1027,14 @@ class ModelView:
     # -- queries ------------------------------------------------------------
 
     def get_jobs(self, size: int = 100) -> list[JobView]:
-        page = self._client.list_model_jobs(self._model.id, size=size)
+        page = self._client.list_model_jobs(self.id, size=size)
         return [JobView(_job=j, _client=self._client) for j in page.iter_items()]
 
     def get_configurations(self) -> list[tuple[System, SystemConfiguration]]:
         """Find every (system, configuration) that tracks this model."""
-        if not self._model.file:
+        if not self._resource.file:
             return []
-        file_id = self._model.file.id
+        file_id = self._resource.file.id
         results: list[tuple[System, SystemConfiguration]] = []
         for system in _paginate_manually(self._client.list_systems):
             for cfg in system.configurations or []:
@@ -700,39 +1047,6 @@ class ModelView:
                 except Exception:
                     continue
         return results
-
-    # -- mutations ----------------------------------------------------------
-
-    def submit_job(
-        self,
-        definition: JobDefinition,
-        save_input: bool = False,
-        save_input_as_revision: bool = False,
-    ) -> JobView:
-        """Submit a job on this model and return a ``JobView``."""
-        job = _submit_job_impl(
-            self._client, self._model.id, definition,
-            save_input=save_input, save_input_as_revision=save_input_as_revision,
-        )
-        return JobView(_job=job, _client=self._client)
-
-    def run_job(
-        self,
-        definition: JobDefinition,
-        timeout: int = 3600,
-        save_input: bool = False,
-        save_input_as_revision: bool = False,
-        poll_interval: int = 5,
-    ) -> JobView:
-        """Submit, wait, and return the completed JobView.
-
-        Raises ``RuntimeError`` if the job fails or times out.
-
-            job = model.run_job(definition)
-            products = job.get_products()
-        """
-        jv = self.submit_job(definition, save_input=save_input, save_input_as_revision=save_input_as_revision)
-        return jv.wait(timeout=timeout, poll_interval=poll_interval).on_success()
 
 
 # ---------------------------------------------------------------------------
@@ -816,12 +1130,15 @@ class TrackedFileSet:
 
     def add_product_as_model(
         self,
-        product: ProductView,
+        product: ResourceView,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
     ) -> TrackedFileSet:
-        """Promote a product to a model and track it. Returns ``self`` for chaining."""
+        """Promote a product (pinned ``ResourceView``) to a model and track it.
+
+        Returns ``self`` for chaining.
+        """
         mv = product.promote(display_name=display_name, filename=filename, external_identifier=external_identifier)
         self._entries.append(NewTrackedFile(
             specifier_type=TrackedFileSpecifierType.LATEST,
@@ -898,7 +1215,7 @@ class ConfigurationView:
             for tf in page.iter_items():
                 if tf.resource_id:
                     model = self._client.get_model(tf.resource_id)
-                    self._models.append(ModelView(_model=model, _client=self._client, _tracked_file=tf))
+                    self._models.append(ModelView(_resource=model, _client=self._client, _tracked_file=tf))
         return self._models
 
     def find_model(
@@ -937,7 +1254,7 @@ class ConfigurationView:
                 matched = True
             if matched:
                 model = self._client.get_model(tf.resource_id)
-                return ModelView(_model=model, _client=self._client, _tracked_file=tf)
+                return ModelView(_resource=model, _client=self._client, _tracked_file=tf)
         return None
 
     def get_tracked_files(self) -> list[TrackedFile]:
@@ -985,12 +1302,12 @@ class ConfigurationView:
 
     def add_product_as_model(
         self,
-        product: ProductView,
+        product: ResourceView,
         display_name: str | None = None,
         filename: str | None = None,
         external_identifier: str | None = None,
     ) -> TrackedFileSet:
-        """Promote a product to a model and track it in a new configuration."""
+        """Promote a product (pinned ``ResourceView``) to a model and track it in a new configuration."""
         return TrackedFileSet(
             system_id=self._config.system_id,
             base_name=self._config.name,
@@ -1167,6 +1484,39 @@ class IstariPlatform:
                 return SystemView(_system=s, _client=self._client)
         raise ValueError(f"System '{name}' not found")
 
+    def find_system(self, name: str) -> SystemView | None:
+        """Find a system by name or return ``None`` (non-raising variant of ``get_system``)."""
+        for s in _paginate_manually(self._client.list_systems):
+            if s.name == name:
+                return SystemView(_system=s, _client=self._client)
+        return None
+
+    def get_or_create_system(
+        self,
+        name: str,
+        description: str = "",
+    ) -> SystemView:
+        """Find a system by name, creating it if missing.
+
+        Returns a ``SystemView`` either way.  Useful at the top of a notebook
+        or tutorial where you don't want to fail if the system isn't there
+        yet::
+
+            system = platform.get_or_create_system(
+                "UAS-Demo",
+                description="Group 3 UAS demo workspace",
+            )
+        """
+        from istari_digital_client.v2.models.new_system import NewSystem
+
+        existing = self.find_system(name)
+        if existing is not None:
+            return existing
+        created = self._client.create_system(
+            NewSystem(name=name, description=description or f"Created by istari_fluent for '{name}'"),
+        )
+        return SystemView(_system=created, _client=self._client)
+
     # -- model --------------------------------------------------------------
 
     def get_job(self, job_id: str) -> JobView:
@@ -1175,7 +1525,7 @@ class IstariPlatform:
 
     def get_model(self, model_id: str) -> ModelView:
         model = self._client.get_model(model_id)
-        return ModelView(_model=model, _client=self._client)
+        return ModelView(_resource=model, _client=self._client)
 
     def find_model(
         self,
@@ -1201,14 +1551,14 @@ class IstariPlatform:
         for m in page.iter_items():
             if name and (m.name == name or getattr(m, "display_name", None) == name):
                 full = self._client.get_model(m.id)
-                return ModelView(_model=full, _client=self._client)
+                return ModelView(_resource=full, _client=self._client)
             if filename and m.file:
                 try:
                     f = self._client.get_file(m.file.id)
                     rev = f.revision
                     if rev and rev.name == filename:
                         full = self._client.get_model(m.id)
-                        return ModelView(_model=full, _client=self._client)
+                        return ModelView(_resource=full, _client=self._client)
                 except Exception:
                     continue
             if external_id and m.file:
@@ -1216,7 +1566,7 @@ class IstariPlatform:
                     f = self._client.get_file(m.file.id)
                     if getattr(f, "external_identifier", None) == external_id:
                         full = self._client.get_model(m.id)
-                        return ModelView(_model=full, _client=self._client)
+                        return ModelView(_resource=full, _client=self._client)
                 except Exception:
                     continue
         return None
@@ -1242,7 +1592,7 @@ class IstariPlatform:
             display_name=display_name or file_path.stem,
             sources=sources,
         )
-        return ModelView(_model=model, _client=self._client)
+        return ModelView(_resource=model, _client=self._client)
 
     # -- file ---------------------------------------------------------------
 
@@ -1280,11 +1630,12 @@ def _submit_job_impl(
     defn: JobDefinition,
     save_input: bool = False,
     save_input_as_revision: bool = False,
+    extra_sources: list[Any] | None = None,
 ) -> Job:
     """Core job-submission logic shared by ModelView and free functions."""
     from istari_digital_client.v2.models.new_source import NewSource
 
-    sources: list[Any] = []
+    sources: list[Any] = list(extra_sources or [])
 
     if save_input or save_input_as_revision:
         model = client.get_model(model_id)

@@ -17,6 +17,9 @@ To run the examples, you will need the following:
 In order to run the examples, download the applicable example notebook and execute in your preferred environment.
 - Reference Jupyter's documentation for [running Jupyter Notebooks](https://docs.jupyter.org/en/latest/running.html).
 
+## Tutorials
+- [`samples/01_getting_started.ipynb`](samples/01_getting_started.ipynb) — end-to-end walkthrough using the [`istari_fluent`](fluent/) client: connect, find-or-create a system, upload a spreadsheet, run two chained extraction jobs, and trace the resulting lineage.
+
 ## Documentation
 See the official [Istari Digital Documentation](https://docs.istaridigital.com) website for applicable Istari Digital Client documentation.
 
