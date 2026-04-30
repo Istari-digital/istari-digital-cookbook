@@ -8,6 +8,21 @@ Entity hierarchy
       |     +-- .baseline              -> SnapshotView
       |     +-- .configurations        -> list[ConfigurationView]
       |     +-- .add_file / .add_revision
+      |     +-- .list_branches()       -> list[BranchView]
+      |     +-- .get_branch(name)      -> BranchView
+      |     +-- .create_branch(name, from_branch=...)  -> BranchView
+      |     +-- .merge(from_branch=..., to_branch=..., message=...) -> BranchView
+      +-- BranchView          (wraps SnapshotTag = Git-style branch)
+      |     +-- .name / .snapshot_id / .is_baseline
+      |     +-- .configuration         -> ConfigurationView (current working area)
+      |     +-- .get_resources()       -> list[TrackedFile]
+      |     +-- .get_subsystems()      -> list[Subsystem]
+      |     +-- .add_resources(*ids)   -> self (staged)
+      |     +-- .remove_resources(*ids)-> self (staged)
+      |     +-- .add_subsystems(*ids)  -> self (staged)
+      |     +-- .remove_subsystems(*ids) -> self (staged)
+      |     +-- .commit(message)       -> self  (snapshot + advance pointer)
+      |     +-- .archive() / .restore()
       +-- SnapshotView        (wraps Snapshot)
       |     +-- .configuration         -> ConfigurationView
       +-- ConfigurationView   (wraps SystemConfiguration)
@@ -42,6 +57,18 @@ Entity hierarchy
       +-- ResourceView        (wraps a Resource: Artifact, Model, Job, ...)
             +-- .id / .type / .raw
 
+Branching model
+---------------
+A *branch* is a ``SnapshotTag`` -- a named, mutable pointer to a ``Snapshot``.
+A *commit* is a new ``Snapshot`` of a ``SystemConfiguration`` (the working area).
+Configurations are immutable once created, so ``commit()`` materialises any
+staged add/remove of resources or subsystems by creating a fresh configuration,
+snapshotting it, and advancing the tag pointer to the new snapshot.
+
+Naming convention: each branch's working configurations are named
+``"branch:<branch_name>"`` (initial) and ``"branch:<branch_name>:<timestamp>"``
+on subsequent commits to keep names unique.
+
 Quick start
 -----------
     from istari_experimental import IstariPlatform
@@ -54,9 +81,17 @@ Quick start
         for job in model.get_jobs():
             print(job.function_name, job.status, job.model_revision_id)
 
-    # Browse all configurations
-    for cfg in system.configurations:
-        print(cfg.name, len(cfg.get_models()))
+    # Branches: list, create, stage, commit, merge -- all chainable
+    main = system.get_branch("main")
+    feature = (
+        system.create_branch("feature/antenna", from_branch="main")
+              .add_resources("model-uuid-1", "model-uuid-2")
+              .add_subsystems("system-uuid-A")
+              .commit("Add antenna model and RF subsystem")
+    )
+    updated_main = system.merge(
+        from_branch="feature/antenna", to_branch="main", message="Merge antenna"
+    )
 
     # Find a model globally, submit a job, inspect outputs
     model = platform.find_model(name="My Model")
@@ -64,12 +99,6 @@ Quick start
     for p in job.get_products():
         rev = p.revision                  # exact revision the agent wrote
         print(rev.name, rev.file_id, rev.id)
-
-    # Upload a model and add it to the baseline configuration
-    model = platform.upload_model("model.mdzip", external_id="ext-123")
-    cfg = system.baseline.configuration
-    new_cfg = cfg.add_file(model.file_id).save()         # auto-name: "v3" -> "v4"
-    new_cfg = cfg.add_file(f1).add_file(f2).save("v5")   # explicit name
 """
 
 from __future__ import annotations
@@ -81,15 +110,16 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence, Union
 
 from pydantic import BaseModel, Field
 from istari_digital_client.client import Client as IstariClient
 from istari_digital_client.v2.models import (
     Model, File, FileRevision, Product, System, Job,
-    Snapshot, SystemConfiguration, TrackedFile,
-    NewTrackedFile, NewSystemConfiguration, TrackedFileSpecifierType,
-    UpdateTag,
+    Snapshot, SnapshotTag, SnapshotTagRevision, SystemConfiguration, TrackedFile,
+    NewSnapshot, NewSnapshotTag, NewTrackedFile, NewTrackedSystem,
+    NewSystemConfiguration, TrackedFileSpecifierType,
+    UpdateTag, Subsystem,
 )
 from istari_digital_client import JobStatusName
 
@@ -143,6 +173,355 @@ def _next_config_name(current: str) -> str:
     if m:
         return f"{m.group(1)}{int(m.group(2)) + 1}"
     return f"{current}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _timestamp_suffix() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _tracked_file_to_new(tf: TrackedFile) -> NewTrackedFile:
+    """Convert an existing TrackedFile into a NewTrackedFile preserving pinning."""
+    if tf.specifier_type == TrackedFileSpecifierType.LOCKED:
+        return NewTrackedFile(
+            specifier_type=TrackedFileSpecifierType.LOCKED,
+            file_id=tf.file_id,
+            pinned_file_revision_id=tf.pinned_file_revision_id or tf.current_file_revision_id,
+        )
+    return NewTrackedFile(
+        specifier_type=TrackedFileSpecifierType.LATEST,
+        file_id=tf.file_id,
+    )
+
+
+def _is_active(entity: Any) -> bool:
+    """``True`` if an SDK entity (TrackedFile, Subsystem, File, ...) is not archived.
+
+    Handles both string archive_status (``"Active"``/``"Archived"``) and the
+    ``is_archived`` boolean used by ``Subsystem``.  Only an explicit ``True``
+    value of ``is_archived`` and an explicit ``"archived"`` archive_status
+    (case-insensitive) flag the entity as archived; everything else is treated
+    as active so this stays robust against partially-populated mocks/stubs.
+    """
+    if getattr(entity, "is_archived", False) is True:
+        return False
+    status = getattr(entity, "archive_status", None)
+    if status is None:
+        return True
+    name = getattr(status, "name", status)
+    name = getattr(name, "value", name)
+    if not isinstance(name, str):
+        return True
+    return name.lower() != "archived"
+
+
+def _active_tracked_files(
+    client: IstariClient,
+    tracked_files: list[TrackedFile],
+    *,
+    verify_files: bool = False,
+) -> list[TrackedFile]:
+    """Return only tracked files whose entry is active.
+
+    The platform refuses ``create_configuration`` if any referenced file is
+    archived (``"Archived files cannot be added to a configuration."``), so
+    callers that copy tracked files between configurations must filter first.
+
+    By default we only check ``TrackedFile.archive_status``; set
+    ``verify_files=True`` to also fetch each underlying ``File`` and drop
+    tracked files whose File is archived even though the TrackedFile reports
+    Active (this costs an extra API call per file).
+    """
+    active_tfs = [tf for tf in tracked_files if _is_active(tf)]
+    if not verify_files:
+        return active_tfs
+    out: list[TrackedFile] = []
+    for tf in active_tfs:
+        if not tf.file_id:
+            continue
+        try:
+            f = client.get_file(tf.file_id)
+        except Exception:
+            out.append(tf)
+            continue
+        if _is_active(f):
+            out.append(tf)
+    return out
+
+
+def _format_dropped_rows(dropped_files: list[TrackedFile], dropped_subs: list[Any], limit: int = 10) -> str:
+    """Render a short bullet list explaining why each row was filtered out."""
+    lines: list[str] = []
+    for tf in dropped_files[:limit]:
+        lines.append(
+            f"    - tracked_file id={tf.id} file_id={tf.file_id} "
+            f"archive_status={tf.archive_status!r}"
+        )
+    for s in dropped_subs[:limit]:
+        is_arch = getattr(s, "is_archived", None)
+        status = getattr(s, "archive_status", None)
+        sid = getattr(s, "id", None) or getattr(s, "tag_id", None)
+        lines.append(f"    - subsystem id={sid} is_archived={is_arch} archive_status={status!r}")
+    overflow = max(0, (len(dropped_files) + len(dropped_subs)) - limit)
+    if overflow:
+        lines.append(f"    ... and {overflow} more")
+    return "\n".join(lines)
+
+
+def _create_branch_configuration(
+    client: IstariClient,
+    *,
+    system_id: str,
+    name: str,
+    tracked_files: list[NewTrackedFile],
+    tracked_systems: list[NewTrackedSystem],
+    source_label: str,
+    source_files_total: int = 0,
+    source_subs_total: int = 0,
+    dropped_archived_files: list[TrackedFile] | None = None,
+    dropped_archived_subs: list[Any] | None = None,
+) -> SystemConfiguration:
+    """Wrap ``create_configuration`` with branch-aware error messages.
+
+    Raises ``ValueError`` (instead of bubbling a raw 400) when the platform
+    would reject the configuration because every tracked item was archived.
+    """
+    dropped_files = dropped_archived_files or []
+    dropped_subs = dropped_archived_subs or []
+    dropped_total = len(dropped_files) + len(dropped_subs)
+    if not tracked_files and not tracked_systems:
+        msg = (
+            f"Cannot create configuration {name!r}: no active tracked files or "
+            f"subsystems to copy from {source_label}. "
+            f"Source had {source_files_total} tracked file(s) and "
+            f"{source_subs_total} subsystem(s); {dropped_total} were "
+            f"skipped as archived."
+        )
+        if source_files_total == 0 and source_subs_total == 0:
+            msg += (
+                " The source branch's configuration is empty -- add at least one"
+                " file/revision to it (e.g. via .add_file/.add_revision on the"
+                " source branch) before forking."
+            )
+        elif dropped_total:
+            details = _format_dropped_rows(dropped_files, dropped_subs)
+            msg += (
+                "\n  Dropped rows:\n"
+                f"{details}\n"
+                "  Note: these tracking *rows* are archived even if the underlying"
+                " files are still active. Restore the tracking rows via the"
+                " platform UI/API, or stage fresh adds with"
+                " .add_resources/.add_subsystems before retrying."
+            )
+        raise ValueError(msg)
+    return client.create_configuration(
+        system_id=system_id,
+        new_system_configuration=NewSystemConfiguration(
+            name=name,
+            tracked_files=tracked_files,
+            tracked_systems=tracked_systems,
+        ),
+    )
+
+
+def _create_snapshot(client: IstariClient, configuration_id: str) -> Snapshot:
+    """Create a snapshot of a configuration's current tracked-file state.
+
+    The platform returns a ``NoOpResponse`` if the configuration's content is
+    identical to its existing snapshot (e.g. when re-snapshotting a config that
+    was just created from the same seed file as a previous snapshot). In that
+    case we look up the existing snapshot and return it, so callers can treat
+    "snapshot already exists" the same as "snapshot just created".
+    """
+    response = client.create_snapshot(
+        configuration_id=configuration_id,
+        new_snapshot=NewSnapshot(dry_run=False),
+    )
+    snap = getattr(response, "actual_instance", response)
+    if getattr(snap, "id", None):
+        return snap
+
+    # NoOp (or otherwise no id): fall back to the most recent existing snapshot
+    # for this configuration.
+    status = getattr(snap, "status", None)
+    if status == "no-op" or "NoOp" in type(snap).__name__:
+        page = client.list_snapshots(configuration_id=configuration_id, size=1, sort="-created")
+        existing = next(iter(page.iter_items()), None)
+        if existing is not None and getattr(existing, "id", None):
+            return existing
+    raise RuntimeError(f"create_snapshot returned no snapshot: {response!r}")
+
+
+# Accepted "resource" inputs for seeding a branch:
+# - Path / str path on disk: uploaded via client.add_model(), tracked at LATEST.
+#   We use add_model (not add_file) so the new tracked entry is bound to a Model
+#   and shows up as a Resource in the UI. To upload only a bare File (rare),
+#   pass a pre-built `NewTrackedFile` or upload separately and pass the `File`.
+# - Model: tracked at LATEST by the model's file_id.
+# - File: tracked at LATEST by file_id (no Model binding -- invisible in UI's
+#   Resources tab unless something else binds it later).
+# - FileRevision: tracked LOCKED at this revision.
+# - TrackedFile: rebuilt as NewTrackedFile preserving specifier.
+# - NewTrackedFile: passed through.
+# - str (not a real path on disk): tried first as a Model id (preferred so the
+#   tracked entry surfaces as a Resource), then as a raw file_id on lookup miss.
+ResourceLike = Union[str, Path, File, Model, FileRevision, TrackedFile, NewTrackedFile]
+
+
+def _resolve_seed_resources(
+    client: IstariClient,
+    resources: Sequence[ResourceLike] | None,
+) -> list[NewTrackedFile]:
+    """Convert a heterogeneous list of seed resources into ``NewTrackedFile`` rows.
+
+    Path-like items are uploaded as **Models** (not bare Files) so the resulting
+    tracked entry is a Resource in the UI. Bare ``File`` objects bypass that and
+    track only the file_id.
+    """
+    from istari_digital_client.exceptions import NotFoundException
+
+    out: list[NewTrackedFile] = []
+    for r in resources or []:
+        if isinstance(r, NewTrackedFile):
+            out.append(r)
+        elif isinstance(r, TrackedFile):
+            out.append(_tracked_file_to_new(r))
+        elif isinstance(r, FileRevision):
+            out.append(NewTrackedFile(
+                specifier_type=TrackedFileSpecifierType.LOCKED,
+                file_id=r.file_id,
+                pinned_file_revision_id=r.id,
+            ))
+        elif isinstance(r, Model):
+            if not r.file:
+                raise ValueError(f"Model {r.id!r} has no file to track")
+            out.append(NewTrackedFile(
+                specifier_type=TrackedFileSpecifierType.LATEST,
+                file_id=r.file.id,
+            ))
+        elif isinstance(r, File):
+            out.append(NewTrackedFile(
+                specifier_type=TrackedFileSpecifierType.LATEST,
+                file_id=r.id,
+            ))
+        elif isinstance(r, (str, Path)):
+            p = Path(r)
+            if p.exists():
+                uploaded_model = client.add_model(path=p)
+                if not uploaded_model.file:
+                    raise RuntimeError(
+                        f"add_model({p}) returned a model with no file: {uploaded_model.id}"
+                    )
+                out.append(NewTrackedFile(
+                    specifier_type=TrackedFileSpecifierType.LATEST,
+                    file_id=uploaded_model.file.id,
+                ))
+            elif isinstance(r, Path):
+                raise FileNotFoundError(f"Path does not exist: {r}")
+            else:
+                # str: try as Model id first (preferred so tracking surfaces a
+                # Resource in the UI), fall back to a raw file_id on miss.
+                try:
+                    model = client.get_model(r)
+                except NotFoundException:
+                    model = None
+                if model is not None:
+                    if not model.file:
+                        raise ValueError(f"Model {r!r} has no file")
+                    out.append(NewTrackedFile(
+                        specifier_type=TrackedFileSpecifierType.LATEST,
+                        file_id=model.file.id,
+                    ))
+                else:
+                    out.append(NewTrackedFile(
+                        specifier_type=TrackedFileSpecifierType.LATEST,
+                        file_id=r,
+                    ))
+        else:
+            raise TypeError(
+                f"Unsupported resource type for create_branch: {type(r).__name__} "
+                f"(expected str, Path, File, Model, FileRevision, TrackedFile or NewTrackedFile)"
+            )
+    return out
+
+
+def _generate_readme_seed(
+    client: IstariClient,
+    branch_name: str,
+    description: str | None,
+) -> NewTrackedFile:
+    """Upload a README.md as a Model and return a ``NewTrackedFile`` row for it.
+
+    Used by :meth:`SystemView.create_branch` when no explicit seed source is
+    given (no ``from_branch``, ``resources``, or ``subsystems``). The platform
+    refuses to create empty configurations, so this provides a reasonable
+    default seed.
+    """
+    from datetime import datetime as _dt
+
+    timestamp = _dt.now().isoformat(timespec="seconds")
+    if description:
+        body = f"# {branch_name}\n\n{description}\n"
+    else:
+        body = (
+            f"# {branch_name}\n\n"
+            f"Branch {branch_name!r} created on {timestamp}.\n"
+        )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", prefix="README-", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(body)
+        tmp_path = Path(f.name)
+    try:
+        uploaded_model = client.add_model(
+            path=tmp_path,
+            display_name=f"README - {branch_name}",
+            description=description,
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    if not uploaded_model.file:
+        raise RuntimeError(
+            f"add_model returned a model with no file for README of {branch_name!r}: "
+            f"{uploaded_model.id}"
+        )
+    return NewTrackedFile(
+        specifier_type=TrackedFileSpecifierType.LATEST,
+        file_id=uploaded_model.file.id,
+    )
+
+
+def _resolve_seed_subsystems(
+    subsystems: Sequence[Any] | None,
+) -> list[NewTrackedSystem]:
+    """Convert seed subsystems (BranchView | (sys_id, tag_id) | NewTrackedSystem) into rows."""
+    out: list[NewTrackedSystem] = []
+    for s in subsystems or []:
+        if isinstance(s, NewTrackedSystem):
+            out.append(s)
+            continue
+        # Avoid importing BranchView at module top (forward ref); duck-type instead.
+        sys_id = None
+        tag_id = None
+        if isinstance(s, tuple) and len(s) == 2:
+            sys_id, tag_id = s
+        else:
+            tag = getattr(s, "_tag", None)
+            sub_system = getattr(s, "_system", None)
+            if tag is not None and sub_system is not None:
+                tag_id = getattr(tag, "id", None)
+                inner = getattr(sub_system, "_system", None)
+                sys_id = getattr(inner, "id", None) if inner is not None else None
+        if not sys_id or not tag_id:
+            raise TypeError(
+                f"Unsupported subsystem entry: {s!r} (expected BranchView, "
+                f"NewTrackedSystem, or (system_id, tag_id) tuple)"
+            )
+        out.append(NewTrackedSystem(system_id=sys_id, tag_id=tag_id))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +1082,43 @@ class ModelView:
 
     # -- mutations ----------------------------------------------------------
 
+    def upload_revision(
+        self,
+        path: str | Path,
+        *,
+        display_name: str | None = None,
+        description: str | None = None,
+        version_name: str | None = None,
+        external_identifier: str | None = None,
+        sources: list[Any] | None = None,
+    ) -> FileRevision:
+        """Upload a new revision to this model and return the new ``FileRevision``.
+
+        Wraps ``client.update_model(model_id, path, ...)`` and refreshes this
+        view's underlying ``Model`` so subsequent properties (``current_revision_id``,
+        etc.) reflect the new revision.
+
+            model = platform.find_model(name="Group3 UAS Requirements")
+            new_rev = model.upload_revision("Group3-UAS-Requirements.xlsx")
+            feature.add_revisions(new_rev).commit("Bump requirements")
+        """
+        updated_model = self._client.update_model(
+            self._model.id,
+            Path(path),
+            sources=sources,
+            description=description,
+            version_name=version_name,
+            external_identifier=external_identifier,
+            display_name=display_name,
+        )
+        self._model = updated_model
+        rev = _latest_revision(updated_model)
+        if rev is None:
+            raise RuntimeError(
+                f"update_model returned model {updated_model.id} with no revisions"
+            )
+        return rev
+
     def submit_job(
         self,
         definition: JobDefinition,
@@ -1061,18 +1477,320 @@ class SnapshotView:
 
 
 # ---------------------------------------------------------------------------
+# BranchView  --  Git-style branch over SnapshotTag + SystemConfiguration
+# ---------------------------------------------------------------------------
+
+def _branch_config_name(branch_name: str, suffix: str | None = None) -> str:
+    base = f"branch:{branch_name}"
+    return f"{base}:{suffix}" if suffix else base
+
+
+@dataclass
+class BranchView:
+    """
+    Wraps a ``SnapshotTag`` (the branch pointer) and its current
+    ``SystemConfiguration`` (the working area).  Mutations are *staged*
+    locally and materialised on ``commit()``.
+
+        main = system.get_branch("main")
+        feat = (
+            system.create_branch("feature/antenna", from_branch="main")
+                  .add_resources("model-uuid-1")
+                  .add_subsystems("subsystem-uuid-A")
+                  .commit("Add antenna and RF subsystem")
+        )
+        feat.get_resources()       # list[TrackedFile] live from API
+        feat.get_subsystems()      # list[Subsystem]   live from API
+    """
+    _system: SystemView = field(repr=False)
+    _tag: SnapshotTag = field(repr=False)
+    _client: IstariClient = field(repr=False)
+    _config: SystemConfiguration | None = field(default=None, repr=False)
+    _pending_add_resources: list[str] = field(default_factory=list, repr=False)
+    _pending_remove_resources: set[str] = field(default_factory=set, repr=False)
+    _pending_add_revisions: list[str] = field(default_factory=list, repr=False)
+    _pending_add_subsystems: list[str] = field(default_factory=list, repr=False)
+    _pending_remove_subsystems: set[str] = field(default_factory=set, repr=False)
+
+    def __repr__(self) -> str:
+        flags = " *" if self.has_pending_changes else ""
+        return f"Branch({self.name!r}, snapshot={self.snapshot_id}{flags})"
+
+    # -- properties ---------------------------------------------------------
+
+    @property
+    def id(self) -> str:
+        return self._tag.id
+
+    @property
+    def name(self) -> str:
+        return self._tag.tag
+
+    @property
+    def snapshot_id(self) -> str | None:
+        return self._tag.snapshot_id
+
+    @property
+    def is_baseline(self) -> bool:
+        return bool(self._tag.is_baseline)
+
+    @property
+    def raw(self) -> SnapshotTag:
+        return self._tag
+
+    @property
+    def has_pending_changes(self) -> bool:
+        return bool(
+            self._pending_add_resources
+            or self._pending_remove_resources
+            or self._pending_add_revisions
+            or self._pending_add_subsystems
+            or self._pending_remove_subsystems
+        )
+
+    @property
+    def configuration(self) -> ConfigurationView:
+        """Current working configuration (the snapshot the branch points at)."""
+        cfg = self._resolve_config()
+        return ConfigurationView(_config=cfg, _client=self._client)
+
+    # -- reads --------------------------------------------------------------
+
+    def get_resources(self) -> list[TrackedFile]:
+        """Tracked files in this branch's current configuration (live)."""
+        cfg = self._resolve_config()
+        page = self._client.list_tracked_files(configuration_id=cfg.id, size=100)
+        return list(page.iter_items())
+
+    def get_subsystems(self) -> list[Subsystem]:
+        """Subsystems tracked by this branch's current configuration (live)."""
+        cfg = self._resolve_config()
+        page = self._client.list_configuration_subsystems(configuration_id=cfg.id, size=100)
+        return list(page.iter_items())
+
+    def get_history(
+        self,
+        *,
+        newest_first: bool = True,
+        include_archived: bool = False,
+    ) -> list[SnapshotTagRevision]:
+        """Audit trail of every snapshot this branch's tag has pointed at.
+
+        Equivalent to ``git log <branch>``: each :class:`SnapshotTagRevision`
+        records when the tag was moved (``created``), who moved it
+        (``created_by_id``), and which snapshot it pointed at
+        (``snapshot_id``). The current ``snapshot_id`` of the branch is the
+        ``snapshot_id`` of the most recent (non-archived) revision.
+
+        Pair each entry with :meth:`get_snapshot_at` (or
+        ``client.get_snapshot(rev.snapshot_id)``) to drill into the
+        configuration as it was at that point in time.
+
+        Args:
+            newest_first: when ``True`` (default), most recent move first --
+                matches ``git log``'s default. Set ``False`` for chronological
+                order (oldest commit first).
+            include_archived: when ``False`` (default), filter out revisions
+                whose ``archive_status`` is anything other than ``Active``
+                (e.g. rewritten history).
+        """
+        revisions = list(self._client.get_tag_history(self._tag.id))
+        if not include_archived:
+            revisions = [
+                r for r in revisions
+                if (getattr(r, "archive_status", None) or "active").lower() == "active"
+            ]
+        revisions.sort(key=lambda r: r.created, reverse=newest_first)
+        return revisions
+
+    def get_snapshot_at(self, revision: SnapshotTagRevision | str) -> Snapshot:
+        """Resolve a history entry (or revision id) to its underlying ``Snapshot``."""
+        snap_id = revision.snapshot_id if isinstance(revision, SnapshotTagRevision) else str(revision)
+        return self._client.get_snapshot(snap_id)
+
+    # -- staged mutations ---------------------------------------------------
+
+    def add_resources(self, *resource_ids: str) -> BranchView:
+        """Stage resources (model ids) to be tracked at next ``commit()``."""
+        for rid in resource_ids:
+            self._pending_remove_resources.discard(rid)
+            if rid not in self._pending_add_resources:
+                self._pending_add_resources.append(rid)
+        return self
+
+    def remove_resources(self, *resource_ids: str) -> BranchView:
+        """Stage resources to be untracked at next ``commit()``."""
+        for rid in resource_ids:
+            self._pending_remove_resources.add(rid)
+            if rid in self._pending_add_resources:
+                self._pending_add_resources.remove(rid)
+        return self
+
+    def add_revisions(self, *revisions: FileRevision | str) -> BranchView:
+        """Stage pinned file revisions to be tracked at next ``commit()``.
+
+        Unlike :meth:`add_resources` (which tracks the resource at LATEST so the
+        branch follows future revisions), this tracks each revision LOCKED so
+        the branch is pinned to that exact revision.
+
+        Each item may be a ``FileRevision`` instance or a revision id string.
+
+            new_rev = model.upload_revision("Group3-UAS-Requirements.xlsx")
+            feature.add_revisions(new_rev).commit("Pin updated requirements")
+        """
+        for r in revisions:
+            rid = r.id if isinstance(r, FileRevision) else str(r)
+            if rid not in self._pending_add_revisions:
+                self._pending_add_revisions.append(rid)
+        return self
+
+    def add_subsystems(self, *system_ids: str) -> BranchView:
+        """Stage subsystems (other Systems referenced by id) to track at next commit."""
+        for sid in system_ids:
+            self._pending_remove_subsystems.discard(sid)
+            if sid not in self._pending_add_subsystems:
+                self._pending_add_subsystems.append(sid)
+        return self
+
+    def remove_subsystems(self, *system_ids: str) -> BranchView:
+        """Stage subsystems to be untracked at next ``commit()``."""
+        for sid in system_ids:
+            self._pending_remove_subsystems.add(sid)
+            if sid in self._pending_add_subsystems:
+                self._pending_add_subsystems.remove(sid)
+        return self
+
+    # -- commit -------------------------------------------------------------
+
+    def commit(self, message: str = "") -> BranchView:
+        """Materialise staged changes: new config + snapshot + advance pointer.
+
+        ``message`` is reserved for future commit-message support; the SDK's
+        ``NewSnapshot`` does not yet accept a message, so it is not persisted.
+        """
+        del message
+        if not self.has_pending_changes:
+            return self
+
+        all_files = self.get_resources()
+        all_subs = self.get_subsystems()
+        current_files = _active_tracked_files(self._client, all_files)
+        current_subs = [s for s in all_subs if _is_active(s)]
+        dropped_files = [tf for tf in all_files if not _is_active(tf)]
+        dropped_subs = [s for s in all_subs if not _is_active(s)]
+
+        kept_files = [tf for tf in current_files if tf.resource_id not in self._pending_remove_resources]
+        added_files = [self._tracked_file_for_resource(rid) for rid in self._pending_add_resources]
+        pinned_files = [self._tracked_file_for_revision(rid) for rid in self._pending_add_revisions]
+
+        kept_subs = [s for s in current_subs if s.tag_id and self._subsystem_system_id(s) not in self._pending_remove_subsystems]
+        added_subs = [self._tracked_system_for(sid) for sid in self._pending_add_subsystems]
+
+        new_cfg = _create_branch_configuration(
+            self._client,
+            system_id=self._system.id,
+            name=_branch_config_name(self.name, _timestamp_suffix()),
+            tracked_files=[*[_tracked_file_to_new(tf) for tf in kept_files], *added_files, *pinned_files],
+            tracked_systems=[
+                *[NewTrackedSystem(system_id=self._subsystem_system_id(s), tag_id=s.tag_id) for s in kept_subs],
+                *added_subs,
+            ],
+            source_label=f"branch {self.name!r}",
+            source_files_total=len(all_files),
+            source_subs_total=len(all_subs),
+            dropped_archived_files=dropped_files,
+            dropped_archived_subs=dropped_subs,
+        )
+
+        snap = _create_snapshot(self._client, new_cfg.id)
+        self._tag = self._client.update_tag(
+            tag_id=self._tag.id,
+            update_tag=UpdateTag(snapshot_id=snap.id),
+        )
+        self._config = new_cfg
+
+        self._pending_add_resources.clear()
+        self._pending_remove_resources.clear()
+        self._pending_add_revisions.clear()
+        self._pending_add_subsystems.clear()
+        self._pending_remove_subsystems.clear()
+        return self
+
+    # -- branch lifecycle ---------------------------------------------------
+
+    def archive(self) -> BranchView:
+        """Soft-delete this branch (the underlying SnapshotTag)."""
+        self._tag = self._client.archive_tag(self._tag.id)
+        return self
+
+    def restore(self) -> BranchView:
+        """Restore an archived branch."""
+        self._tag = self._client.restore_tag(self._tag.id)
+        return self
+
+    # -- internals ----------------------------------------------------------
+
+    def _resolve_config(self) -> SystemConfiguration:
+        if self._config is not None:
+            return self._config
+        if not self._tag.snapshot_id:
+            raise ValueError(f"Branch {self.name!r} has no snapshot")
+        snap = self._client.get_snapshot(self._tag.snapshot_id)
+        self._config = self._client.get_configuration(snap.configuration_id)
+        return self._config
+
+    def _tracked_file_for_resource(self, resource_id: str) -> NewTrackedFile:
+        """Resolve a resource id (Model id) to a LATEST-pinned NewTrackedFile."""
+        model = self._client.get_model(resource_id)
+        if not model.file:
+            raise ValueError(f"Resource {resource_id!r} has no file")
+        return NewTrackedFile(
+            specifier_type=TrackedFileSpecifierType.LATEST,
+            file_id=model.file.id,
+        )
+
+    def _tracked_file_for_revision(self, revision_id: str) -> NewTrackedFile:
+        """Resolve a revision id to a LOCKED NewTrackedFile pinned at that revision."""
+        rev = self._client.get_revision(revision_id)
+        file_id = getattr(rev, "file_id", None)
+        if not file_id:
+            raise ValueError(
+                f"Revision {revision_id!r} is not attached to a file (file_id is empty); "
+                f"upload it via Model.upload_revision() or client.update_model() first"
+            )
+        return NewTrackedFile(
+            specifier_type=TrackedFileSpecifierType.LOCKED,
+            file_id=file_id,
+            pinned_file_revision_id=revision_id,
+        )
+
+    def _tracked_system_for(self, system_id: str) -> NewTrackedSystem:
+        """Resolve a system id to its current baseline tag for tracking as subsystem."""
+        baseline = self._client.get_system_baseline(system_id)
+        if not baseline.tag_id:
+            raise ValueError(f"System {system_id!r} has no baseline tag")
+        return NewTrackedSystem(system_id=system_id, tag_id=baseline.tag_id)
+
+    @staticmethod
+    def _subsystem_system_id(s: Subsystem) -> str | None:
+        """Subsystems are referenced by tag; resolve back to the originating system id."""
+        cfg = getattr(s, "tagged_configuration", None)
+        return getattr(cfg, "system_id", None) if cfg else None
+
+
+# ---------------------------------------------------------------------------
 # SystemView
 # ---------------------------------------------------------------------------
 
 @dataclass
 class SystemView:
     """
-    Fluent wrapper: System -> baseline -> configuration -> models.
+    Fluent wrapper: System -> baseline -> configuration -> models, plus branches.
 
         system = platform.get_system("Berserker")
-        system.baseline.configuration.name         # config behind the baseline
-        system.baseline.configuration.get_models()  # models from that config
-        system.configurations                      # all configs on the system
+        system.baseline.configuration.get_models()
+        for branch in system.list_branches():
+            print(branch.name, branch.snapshot_id)
     """
     _system: System = field(repr=False)
     _client: IstariClient = field(repr=False)
@@ -1112,6 +1830,179 @@ class SystemView:
     def add_revision(self, revision_id: str, configuration_name: str | None = None) -> SystemConfiguration:
         """Track a pinned file revision by creating a new configuration."""
         return _add_tracked_file(self._client, self._system.id, revision_id=revision_id, config_name=configuration_name)
+
+    # -- branches -----------------------------------------------------------
+
+    def list_branches(self) -> list[BranchView]:
+        """All branches (SnapshotTags) on this system."""
+        tags = _paginate_manually(self._client.list_tags, system_id=self._system.id)
+        return [BranchView(_system=self, _tag=t, _client=self._client) for t in tags]
+
+    def get_branch(self, name: str) -> BranchView:
+        """Lookup a branch by name. Raises ``ValueError`` if not found."""
+        for b in self.list_branches():
+            if b.name == name:
+                return b
+        raise ValueError(f"Branch {name!r} not found on system {self.name!r}")
+
+    def create_branch(
+        self,
+        name: str,
+        *,
+        description: str | None = None,
+        from_branch: str | None = None,
+        resources: Sequence[ResourceLike] | None = None,
+        subsystems: Sequence[Any] | None = None,
+    ) -> BranchView:
+        """Create a new branch.
+
+        The new branch is materialised as a fresh ``SystemConfiguration`` named
+        ``"branch:<name>"``, a ``Snapshot`` of it, and a ``SnapshotTag(tag=name)``
+        pointing at that snapshot.
+
+        The platform refuses to create empty configurations, so the new branch
+        must contain at least one tracked file or subsystem. Seeding rules:
+
+        1. Explicit ``resources`` / ``subsystems`` are always honored.
+        2. ``from_branch="..."`` forks that branch's active tracked items
+           (combined with explicit seeds if both are given).
+        3. If neither (1) nor (2) is provided, a small ``README.md`` is
+           generated and uploaded as a Model — so ``create_branch(name)``
+           "just works".
+
+        There is **no** implicit baseline fork: forking another branch is
+        always opt-in via ``from_branch=``.
+
+        Args:
+            name: branch name (must be unique on this system).
+            description: optional text; becomes the README body when the
+                auto-README fallback fires, otherwise stored as Model metadata.
+            from_branch: name of an existing branch to fork from.
+            resources: optional seed list. Items may be paths on disk
+                (uploaded via ``client.add_model``), Model id strings (looked
+                up first; falls back to ``file_id`` on miss), or
+                ``Model`` / ``File`` / ``FileRevision`` / ``TrackedFile``
+                / ``NewTrackedFile`` objects.
+            subsystems: optional seed list. Items may be ``BranchView``,
+                ``(system_id, tag_id)`` tuples, or ``NewTrackedSystem``.
+        """
+        if any(b.name == name for b in self.list_branches()):
+            raise ValueError(f"Branch {name!r} already exists on system {self.name!r}")
+
+        seed_files = _resolve_seed_resources(self._client, resources)
+        seed_subs = _resolve_seed_subsystems(subsystems)
+        has_explicit_seeds = bool(seed_files or seed_subs)
+
+        # Optional fork from an existing branch.
+        fork_files: list[NewTrackedFile] = []
+        fork_subs: list[NewTrackedSystem] = []
+        source_label = "explicit seed list"
+        source_files_total = 0
+        source_subs_total = 0
+        dropped_files: list[TrackedFile] = []
+        dropped_subs: list[Any] = []
+
+        if from_branch is not None:
+            source_snapshot_id = self.get_branch(from_branch).snapshot_id
+            source_label = f"branch {from_branch!r}"
+            if not source_snapshot_id:
+                if not has_explicit_seeds:
+                    raise ValueError(f"{source_label} has no snapshot to fork from")
+            else:
+                source_snap = self._client.get_snapshot(source_snapshot_id)
+                source_cfg = self._client.get_configuration(source_snap.configuration_id)
+                source_files = list(self._client.list_tracked_files(configuration_id=source_cfg.id, size=100).iter_items())
+                source_subs = list(self._client.list_configuration_subsystems(configuration_id=source_cfg.id, size=100).iter_items())
+                active_files = _active_tracked_files(self._client, source_files)
+                active_subs = [s for s in source_subs if _is_active(s)]
+                dropped_files = [tf for tf in source_files if not _is_active(tf)]
+                dropped_subs = [s for s in source_subs if not _is_active(s)]
+                source_files_total = len(source_files)
+                source_subs_total = len(source_subs)
+                fork_files = [_tracked_file_to_new(tf) for tf in active_files]
+                fork_subs = [
+                    NewTrackedSystem(
+                        system_id=BranchView._subsystem_system_id(s),
+                        tag_id=s.tag_id,
+                    )
+                    for s in active_subs
+                    if s.tag_id and BranchView._subsystem_system_id(s)
+                ]
+            if has_explicit_seeds:
+                source_label = f"{source_label} + seeds"
+
+        # Auto-README: nothing else to seed with -> generate a README.md so the
+        # platform's "configuration must have at least one tracked file" rule
+        # is met without forcing the caller to pre-stage anything.
+        elif not has_explicit_seeds:
+            seed_files = [_generate_readme_seed(self._client, name, description)]
+            has_explicit_seeds = True
+            source_label = "auto README seed"
+
+        new_cfg = _create_branch_configuration(
+            self._client,
+            system_id=self._system.id,
+            name=_branch_config_name(name),
+            tracked_files=[*fork_files, *seed_files],
+            tracked_systems=[*fork_subs, *seed_subs],
+            source_label=source_label,
+            source_files_total=source_files_total + len(seed_files),
+            source_subs_total=source_subs_total + len(seed_subs),
+            dropped_archived_files=dropped_files,
+            dropped_archived_subs=dropped_subs,
+        )
+        snap = _create_snapshot(self._client, new_cfg.id)
+        new_tag = self._client.create_tag(
+            snapshot_id=snap.id,
+            new_snapshot_tag=NewSnapshotTag(tag=name),
+        )
+        return BranchView(_system=self, _tag=new_tag, _client=self._client, _config=new_cfg)
+
+    def merge(self, *, from_branch: str, to_branch: str, message: str = "") -> BranchView:
+        """Merge ``from_branch`` into ``to_branch`` by replacing the latter's tracked
+        items with the former's, then committing on ``to_branch``.
+
+        This is a "ours-overwrite" merge -- there is no three-way reconciliation.
+        """
+        if from_branch == to_branch:
+            raise ValueError("from_branch and to_branch must differ")
+
+        source = self.get_branch(from_branch)
+        target = self.get_branch(to_branch)
+
+        all_files = source.get_resources()
+        all_subs = source.get_subsystems()
+        source_files = _active_tracked_files(self._client, all_files)
+        source_subs = [s for s in all_subs if _is_active(s)]
+        dropped_files = [tf for tf in all_files if not _is_active(tf)]
+        dropped_subs = [s for s in all_subs if not _is_active(s)]
+
+        new_cfg = _create_branch_configuration(
+            self._client,
+            system_id=self._system.id,
+            name=_branch_config_name(target.name, _timestamp_suffix()),
+            tracked_files=[_tracked_file_to_new(tf) for tf in source_files],
+            tracked_systems=[
+                NewTrackedSystem(
+                    system_id=BranchView._subsystem_system_id(s),
+                    tag_id=s.tag_id,
+                )
+                for s in source_subs
+                if s.tag_id and BranchView._subsystem_system_id(s)
+            ],
+            source_label=f"branch {from_branch!r}",
+            source_files_total=len(all_files),
+            source_subs_total=len(all_subs),
+            dropped_archived_files=dropped_files,
+            dropped_archived_subs=dropped_subs,
+        )
+        snap = _create_snapshot(self._client, new_cfg.id)
+        target._tag = self._client.update_tag(
+            tag_id=target.id,
+            update_tag=UpdateTag(snapshot_id=snap.id),
+        )
+        target._config = new_cfg
+        return target
 
 
 # ---------------------------------------------------------------------------
@@ -1155,17 +2046,80 @@ class IstariPlatform:
 
     # -- system -------------------------------------------------------------
 
-    def get_system(self, name: str) -> SystemView:
-        """
-        Find a system by name and return a ``SystemView``.
+    def get_system(
+        self,
+        name_or_id: str,
+        *,
+        by_id: bool | None = None,
+        include_archived: bool = False,
+        page_size: int = 100,
+        request_timeout_secs: int | None = 60,
+        verbose: bool = False,
+    ) -> SystemView:
+        """Find a system by name (or id) and return a ``SystemView``.
 
             system = platform.get_system("Berserker")
-            models = system.get_models()
+            system = platform.get_system("01HXYZ...", by_id=True)
+
+        Strategy:
+
+        * If ``by_id`` is True (or the argument looks like a UUID/ULID), do a
+          single ``client.get_system(id)`` call — much faster than scanning.
+        * Otherwise stream through ``list_systems`` page by page and return as
+          soon as a name match is found, instead of fetching every system first.
+        * ``archive_status`` defaults to ``"active"`` to keep the listing
+          small; pass ``include_archived=True`` to scan archived systems too.
+        * ``request_timeout_secs`` bounds each individual API request so a
+          slow tenant won't hang the notebook indefinitely.
+        * ``verbose=True`` prints per-page progress.
         """
-        for s in _paginate_manually(self._client.list_systems):
-            if s.name == name:
-                return SystemView(_system=s, _client=self._client)
-        raise ValueError(f"System '{name}' not found")
+        if by_id is None:
+            # heuristic: ULIDs/UUIDs are 26+ chars and contain no spaces
+            by_id = len(name_or_id) >= 26 and " " not in name_or_id and "-" in name_or_id
+
+        if by_id:
+            if verbose:
+                print(f"[get_system] direct fetch by id: {name_or_id}")
+            try:
+                s = self._client.get_system(name_or_id)
+            except Exception as e:
+                raise ValueError(f"System with id {name_or_id!r} not found: {e}") from e
+            return SystemView(_system=s, _client=self._client)
+
+        from istari_digital_client.v2.models import ArchiveStatus
+
+        list_kwargs: dict[str, Any] = {
+            "size": page_size,
+            "archive_status": (ArchiveStatus.ALL if include_archived else ArchiveStatus.ACTIVE),
+        }
+        if request_timeout_secs is not None:
+            list_kwargs["http_request_timeout_secs"] = request_timeout_secs
+
+        page = 1
+        scanned = 0
+        while True:
+            if verbose:
+                print(f"[get_system] fetching page {page} (size={page_size}) ...", flush=True)
+            current = self._client.list_systems(page=page, **list_kwargs)
+            items = current.items or []
+            if not items:
+                break
+            for s in items:
+                scanned += 1
+                if s.name == name_or_id:
+                    if verbose:
+                        print(f"[get_system] matched on page {page} after {scanned} systems")
+                    return SystemView(_system=s, _client=self._client)
+            if verbose:
+                total = getattr(current, "pages", None)
+                print(f"[get_system] page {page}/{total or '?'} done  (scanned {scanned} so far)")
+            if current.pages and page >= current.pages:
+                break
+            page += 1
+        raise ValueError(
+            f"System {name_or_id!r} not found after scanning {scanned} system(s) "
+            f"across {page} page(s) (include_archived={include_archived})"
+        )
 
     # -- model --------------------------------------------------------------
 

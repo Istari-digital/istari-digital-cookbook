@@ -1,0 +1,17 @@
+Electrical Loads Analysis – Summary
+Generated: 2026-04-16T20:18:36
+
+[Overall]
+Buses Total (W): 1100.00
+Equivalent Amps: 39.29
+PMU Power Capacity (W): 2000.00
+PMU Power Margin (W): 900.00
+PMU Power Margin (%): 45.00%
+Generator Power Capacity (W): 3000.00
+Generator Power Margin (W): 1900.00
+Generator Power Margin (%): 63.33%
+
+[Top Bus Consumers by MAX Wattage + 25%]
+ - Bus 1 (28 VDC): 500.00 W (45.00%)
+ - Bus 2 (14 VDC): 350.00 W (32.00%)
+ - Bus 3 (5 VDC): 250.00 W (23.00%)

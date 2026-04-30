@@ -40,6 +40,24 @@ IstariPlatform                (entry point)
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
   |     +-- .configurations          -> list[ConfigurationView]
+  |     +-- .list_branches()         -> list[BranchView]
+  |     +-- .get_branch(name)        -> BranchView
+  |     +-- .create_branch(name, from_branch=...)  -> BranchView
+  |     +-- .merge(from_branch=..., to_branch=..., message=...) -> BranchView
+  +-- BranchView              (wraps SnapshotTag = Git-style branch)
+  |     +-- .name / .snapshot_id / .is_baseline
+  |     +-- .configuration           -> ConfigurationView (current working area)
+  |     +-- .get_resources()         -> list[TrackedFile]
+  |     +-- .get_subsystems()        -> list[Subsystem]
+  |     +-- .get_history()           -> list[SnapshotTagRevision] (git log)
+  |     +-- .get_snapshot_at(rev)    -> Snapshot
+  |     +-- .add_resources(*ids)     -> self  (staged)
+  |     +-- .remove_resources(*ids)  -> self  (staged)
+  |     +-- .add_revisions(*revs)    -> self  (staged, LOCKED)
+  |     +-- .add_subsystems(*ids)    -> self  (staged)
+  |     +-- .remove_subsystems(*ids) -> self  (staged)
+  |     +-- .commit(message)         -> self  (snapshot + advance pointer)
+  |     +-- .archive() / .restore()
   +-- SnapshotView            (wraps Snapshot)
   |     +-- .configuration           -> ConfigurationView
   +-- ConfigurationView       (wraps SystemConfiguration)
@@ -188,6 +206,70 @@ model = cfg.find_model(name="My SysML Model")
 model = cfg.find_model(filename="Group3-UAS-Wing-v9.ntop")
 model = cfg.find_model(external_id="dod-safe-berserker")
 ```
+
+### Branching
+
+A *branch* is a `SnapshotTag` -- a named, mutable pointer to a `Snapshot`.
+A *commit* is a new `Snapshot` of a `SystemConfiguration` (the working area).
+Configurations are immutable once created, so `commit()` materialises any
+staged add/remove of resources or subsystems by creating a fresh configuration,
+snapshotting it, and advancing the tag to that new snapshot.
+
+Working configurations created by branch operations are named
+`branch:<branch_name>` (initial) and `branch:<branch_name>:<timestamp>`
+on subsequent commits.
+
+```python
+system = platform.get_system("Berserker")
+
+# List branches
+for branch in system.list_branches():
+    print(branch.name, branch.snapshot_id, "(baseline)" if branch.is_baseline else "")
+
+# Look one up
+main = system.get_branch("main")
+
+# Create a branch (auto-seeds a README.md if no source/seeds given),
+# stage resources/subsystems, commit -- all chainable.
+feature = (
+    system.create_branch("feature/antenna", from_branch="main")
+          .add_resources("model-uuid-1", "model-uuid-2")
+          .add_subsystems("system-uuid-A")
+          .commit("Add antenna model and RF subsystem")
+)
+
+# Read live state from the branch's current configuration
+resources  = feature.get_resources()    # list[TrackedFile]
+subsystems = feature.get_subsystems()   # list[Subsystem]
+
+# Branch history -- like `git log <branch>` -- newest first.
+for rev in feature.get_history():
+    print(rev.created, rev.created_by_id, rev.snapshot_id)
+prev_snap = feature.get_snapshot_at(feature.get_history()[1])  # one commit back
+
+# Further chained mutations
+(feature
+    .remove_resources("model-uuid-old")
+    .add_resources("model-uuid-new")
+    .commit("Swap legacy resource"))
+
+# Merge a feature branch back into main (ours-overwrite -- no 3-way merge)
+updated_main = system.merge(
+    from_branch="feature/antenna",
+    to_branch="main",
+    message="Merge antenna feature",
+)
+
+# Soft-delete / restore a branch
+feature.archive()
+feature.restore()
+```
+
+Internals worth knowing:
+
+- `add_resources(*ids)` / `remove_resources(*ids)` take **resource ids** (typically `Model.id`). Adds resolve to the model's current `file_id` and track LATEST.
+- `add_subsystems(*ids)` takes other **`System.id`** values; the subsystem is pinned to that system's current baseline tag.
+- Mutations are **staged locally** and applied atomically by `commit()`. Until you commit, `branch.has_pending_changes` is `True` and the live `get_resources()` / `get_subsystems()` reflect the *committed* state, not the pending edits.
 
 ## Tests
 

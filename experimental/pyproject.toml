@@ -2,7 +2,7 @@
 name = "istari-digital-fluent-client"
 version = "0.1.0"
 description = "Entity-oriented wrapper over the Istari Digital Python client"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "istari-digital-client",
     "python-dotenv",
