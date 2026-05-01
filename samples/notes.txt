@@ -1,0 +1,2 @@
+create python notebook in samples for an initial tutorial experience covering
+conencting, finding a system, creating if not found, upload the group3-uas-requireemnts file run a job find the xls in the output and run secon job (same extract) get the output and get the lineage.
