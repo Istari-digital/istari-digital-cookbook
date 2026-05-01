@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json",
+  "include": ["fluent", "experimental", "samples"],
+  "exclude": ["**/.venv", "**/node_modules", "**/__pycache__"],
+  "extraPaths": ["fluent", "experimental"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic"
+}
