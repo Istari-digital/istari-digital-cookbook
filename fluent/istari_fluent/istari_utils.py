@@ -4,6 +4,7 @@ Istari SDK utilities -- object-oriented wrappers over the flat client API.
 Entity hierarchy
 ----------------
     IstariPlatform           (entry point, wraps Client)
+      +-- .list_models()            -> list[ModelView]  (paginated; full Model per row)
       +-- SystemView         (wraps System)
       |     +-- .baseline              -> SnapshotView
       |     +-- .configurations        -> list[ConfigurationView]
@@ -18,10 +19,11 @@ Entity hierarchy
       +-- TrackedFileSet        (builder for new configurations)
       |     +-- .add_file(fid)         -> self  (chainable)
       |     +-- .save(name=None)       -> ConfigurationView
-      +-- ModelView           (wraps Model + optional TrackedFile)
+      +-- ModelView           (wraps Model + optional TrackedFile; extends ResourceView)
       |     +-- .name / .id
       |     +-- .current_revision_id / .pinned_revision_id
-      |     +-- .get_jobs()            -> list[JobView]
+      |     +-- .get_jobs() / .get_configurations()
+      |     +-- .download_artifacts() / .archive()
       |     +-- .submit_job()          -> JobView
       |     +-- .run_job()             -> JobView
       +-- JobView             (wraps Job)
@@ -38,15 +40,12 @@ Entity hierarchy
       |     +-- .revision              -> FileRevision  (pinned if set, else latest)
       |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
       |     +-- .name / .filename / .mime / .file_id / .revision_id
-      |     +-- .read_bytes() / .read_text() / .download(dest)
+      |     +-- .read_bytes() / .read_text() / .read_json() / .download(dest)
       |     +-- .as_source()           -> NewSource  (chain into next job, no API call)
       |     +-- .promote()             -> ModelView  (revision-to-model, tagged 'promoted_from')
       |     +-- .get_lineage()         -> LineageNode  (backward provenance)
       |     +-- .submit_job(defn)      -> JobView  (auto-promotes Artifact resources)
       |     +-- .run_job(defn)         -> JobView  (submit + wait + on_success)
-      +-- ModelView           (ResourceView specialised for Model; adds tracked-file context)
-      |     +-- .current_revision_id / .pinned_revision_id
-      |     +-- .get_jobs() / .get_configurations()
       +-- LineageNode         (one revision in a backward lineage tree)
             +-- .step          'upload' | 'job_run' | 'promotion' | 'derived'
             +-- .parents       list[LineageNode]  (recursive)
@@ -54,9 +53,10 @@ Entity hierarchy
 
 Quick start
 -----------
-    from istari_fluent import IstariPlatform
+    from istari_fluent import IstariPlatform, configure_ssl_certificates
 
-    platform = IstariPlatform.from_env()
+    configure_ssl_certificates("/path/to/ca.pem")   # optional — corporate TLS only
+    platform = IstariPlatform.from_env()             # or: from_env(ca_bundle="...")
 
     # System -> baseline -> configuration -> models -> jobs
     system = platform.get_system("Berserker")
@@ -94,7 +94,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import tempfile
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -135,6 +137,29 @@ def _paginate_manually(
     return items
 
 
+def configure_ssl_certificates(bundle_path: str | Path) -> ssl.SSLContext:
+    """Point Python ``requests`` / ``urllib3`` at a custom CA bundle (corporate TLS interception).
+
+    Sets ``REQUESTS_CA_BUNDLE`` and ``SSL_CERT_FILE`` to *bundle_path* and returns an
+    ``ssl.SSLContext`` using that file.  Call **before** creating
+    ``IstariPlatform.from_env()`` (or pass ``ca_bundle=`` into ``from_env``).
+
+    *bundle_path* must exist (typically a ``*.pem`` from your IT team).
+
+    Alternatively set ``ISTARI_CA_BUNDLE`` in the environment and use
+    ``IstariPlatform.from_env()`` without arguments.
+    """
+    bundle_path_obj = Path(bundle_path)
+    if not bundle_path_obj.is_file():
+        raise FileNotFoundError(f"Certificate bundle not found: {bundle_path_obj}")
+
+    resolved = str(bundle_path_obj.resolve())
+    os.environ["REQUESTS_CA_BUNDLE"] = resolved
+    os.environ["SSL_CERT_FILE"] = resolved
+
+    return ssl.create_default_context(cafile=resolved)
+
+
 def _latest_revision(model: Model):
     """Return the most recent FileRevision of a model, or None."""
     if model.file and model.file.revisions:
@@ -155,8 +180,6 @@ def _next_config_name(current: str) -> str:
     ``'v12'`` -> ``'v13'``, ``'config_3'`` -> ``'config_4'``,
     ``'baseline'`` -> ``'baseline_20260306_143022'``
     """
-    from datetime import datetime
-
     m = re.match(r"^(.*?)(\d+)$", current)
     if m:
         return f"{m.group(1)}{int(m.group(2)) + 1}"
@@ -239,9 +262,15 @@ class LineageNode:
     relationship_to_child: str | None
     parents: list[LineageNode] = field(default_factory=list)
     truncated: bool = False
+    function_name: str | None = None
 
     @property
     def label(self) -> str:
+        if self.resource_type == "Job":
+            fn = self.function_name or "job"
+            if self.resource_id:
+                return f"{fn} ({self.resource_id})"
+            return fn
         return self.display_name or self.name or self.revision_id
 
     def __repr__(self) -> str:
@@ -271,8 +300,16 @@ class LineageNode:
             p.print_tree(indent + 1, _is_root=False)
 
 
-def _classify_step(rev: FileRevision) -> str:
-    """Classify how a FileRevision came into existence from its sources."""
+def _classify_step(rev: FileRevision, resource_type: str | None = None) -> str:
+    """Classify how a FileRevision came into existence.
+
+    A revision whose owning resource is a ``Job`` is always a ``job_run``
+    (it *represents* a job invocation).  Otherwise we look at sources:
+    none -> upload, any ``promoted_from`` marker -> promotion, any Job
+    source -> job_run, else derived.
+    """
+    if resource_type == "Job":
+        return "job_run"
     sources = rev.sources or []
     if not sources:
         return "upload"
@@ -293,24 +330,53 @@ def _build_lineage_node(
     max_depth: int,
     depth: int,
     cache: dict[str, LineageNode],
+    source_info: Any = None,
 ) -> LineageNode:
     """Recursively build a LineageNode tree from a FileRevision.
+
+    Two restructuring rules turn the raw platform graph into a readable
+    provenance tree:
+
+    1. **Job nodes.**  The SDK uploads a ``parameters<hash>.json`` blob onto
+       the Job's own file when submitting.  Every output artifact lists that
+       parameters revision as a source with ``resource_type=="Job"``.  We
+       surface it as a ``Job`` node carrying the job id and (when fetchable)
+       its ``function.name``, rather than as an anonymous "Revision".  The
+       ``resource_type``/``resource_id`` are read directly from the
+       ``Source`` record (no extra ``get_file`` round-trip).
+
+    2. **Drop redundant siblings.**  When an Artifact has sources like
+       ``[Model input, Job parameters]``, the Model is *also* the Job's own
+       input -- it shows up under the Job node a level deeper.  Printing it
+       both places bloats the tree and makes the provenance confusing, so
+       when at least one Job source exists we keep only Job and
+       ``promoted_from`` sources at the current level.
+
+    The end result is ``Artifact <- Job <- Model`` instead of the raw
+    ``Artifact <- [Model, parameters.json <- Model]``.
 
     ``cache`` memoizes by revision id so a diamond-shaped DAG is built once.
     Stops descending at ``max_depth``; deeper nodes are returned with
     ``truncated=True`` and no parents.
     """
     if rev.id in cache:
-        cached = cache[rev.id]
-        return cached
+        return cache[rev.id]
 
-    resource_type = None
-    resource_id = None
-    if rev.file_id:
+    resource_type = getattr(source_info, "resource_type", None) if source_info is not None else None
+    resource_id = getattr(source_info, "resource_id", None) if source_info is not None else None
+    if not resource_type and rev.file_id:
         try:
             f = client.get_file(rev.file_id)
-            resource_type = getattr(f, "resource_type", None)
-            resource_id = getattr(f, "resource_id", None)
+            resource_type = getattr(f, "resource_type", None) or resource_type
+            resource_id = getattr(f, "resource_id", None) or resource_id
+        except Exception:
+            pass
+
+    function_name: str | None = None
+    if resource_type == "Job" and resource_id:
+        try:
+            job = client.get_job(resource_id)
+            function_name = getattr(getattr(job, "function", None), "name", None)
         except Exception:
             pass
 
@@ -322,10 +388,11 @@ def _build_lineage_node(
         created=rev.created,
         resource_type=resource_type,
         resource_id=resource_id,
-        step=_classify_step(rev),
+        step=_classify_step(rev, resource_type=resource_type),
         relationship_to_child=relationship_to_child,
         parents=[],
         truncated=False,
+        function_name=function_name,
     )
     cache[rev.id] = node
 
@@ -333,7 +400,16 @@ def _build_lineage_node(
         node.truncated = bool(rev.sources)
         return node
 
-    for src in rev.sources or []:
+    sources = list(rev.sources or [])
+    has_job_source = any(getattr(s, "resource_type", None) == "Job" for s in sources)
+    if has_job_source:
+        sources = [
+            s for s in sources
+            if getattr(s, "resource_type", None) == "Job"
+            or s.relationship_identifier == "promoted_from"
+        ]
+
+    for src in sources:
         try:
             parent_rev = client.get_revision(src.revision_id)
         except Exception:
@@ -345,6 +421,7 @@ def _build_lineage_node(
             max_depth=max_depth,
             depth=depth + 1,
             cache=cache,
+            source_info=src,
         )
         node.parents.append(parent)
 
@@ -354,6 +431,57 @@ def _build_lineage_node(
 # ---------------------------------------------------------------------------
 # Shared promotion helper
 # ---------------------------------------------------------------------------
+
+class _LazyResource:
+    """Proxy for an SDK Resource -- fetches on first real attribute access.
+
+    Used by ``JobView.get_products(lazy=True)`` so enumerating products does
+    not pay a ``get_resource`` round-trip per product.  Exposes ``id`` and the
+    resource-type hint without loading; any other attribute forwards to the
+    loaded Resource.
+    """
+
+    __slots__ = ("_client", "_resource_type", "_resource_id", "_loaded")
+
+    def __init__(self, client: IstariClient, resource_type: str, resource_id: str) -> None:
+        object.__setattr__(self, "_client", client)
+        object.__setattr__(self, "_resource_type", resource_type)
+        object.__setattr__(self, "_resource_id", resource_id)
+        object.__setattr__(self, "_loaded", None)
+
+    @property
+    def id(self) -> str:
+        return self._resource_id
+
+    def _load(self) -> Any:
+        if self._loaded is None:
+            object.__setattr__(
+                self, "_loaded",
+                self._client.get_resource(self._resource_type, self._resource_id),
+            )
+        return self._loaded
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._load(), name)
+
+
+def _make_revision_loader(
+    client: IstariClient,
+    revision_id: str,
+) -> Callable[[], FileRevision | None]:
+    """Return a zero-arg callable that fetches and returns ``revision_id`` once.
+
+    Intended for ``ResourceView._revision_loader``.  Swallows SDK errors and
+    returns ``None`` so a broken id on a single product does not prevent the
+    caller from inspecting the rest of the list.
+    """
+    def _load() -> FileRevision | None:
+        try:
+            return client.get_revision(revision_id)
+        except Exception:
+            return None
+    return _load
+
 
 def _promote_revision_to_model(
     client: IstariClient,
@@ -447,11 +575,11 @@ class ResourceView:
     _resource: Any = field(repr=False)
     _client: IstariClient = field(repr=False)
     _pinned_revision: FileRevision | None = field(default=None, repr=False)
+    _revision_loader: Callable[[], FileRevision | None] | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
-        mime = self.mime or "?"
         pin = f", pinned_rev={self._pinned_revision.id}" if self._pinned_revision else ""
-        return f"{self.type}({self.name!r}, id={self.id}, mime={mime}{pin})"
+        return f"{self.type}({self.name!r}, id={self.id}{pin})"
 
     # -- identity -----------------------------------------------------------
 
@@ -462,7 +590,10 @@ class ResourceView:
     @property
     def type(self) -> str:
         """Concrete resource type name (e.g. ``'Model'``, ``'Artifact'``, ``'Job'``)."""
-        return type(self._resource).__name__
+        res = self._resource
+        if isinstance(res, _LazyResource):
+            return res._resource_type
+        return type(res).__name__
 
     @property
     def raw(self) -> Any:
@@ -490,7 +621,14 @@ class ResourceView:
 
     @property
     def revision(self) -> FileRevision | None:
-        """The effective revision: pinned if set, else latest."""
+        """The effective revision: pinned if set, else latest.
+
+        Honours a lazy ``_revision_loader`` when the pin was deferred (see
+        ``JobView.get_products(lazy=True)``); loads once and memoises.
+        """
+        if self._pinned_revision is None and self._revision_loader is not None:
+            self._pinned_revision = self._revision_loader()
+            self._revision_loader = None
         return self._pinned_revision or self.latest_revision
 
     @property
@@ -500,7 +638,8 @@ class ResourceView:
 
     @property
     def is_pinned(self) -> bool:
-        return self._pinned_revision is not None
+        """True when the view targets a specific revision (already loaded or still deferred)."""
+        return self._pinned_revision is not None or self._revision_loader is not None
 
     def pin(self, revision: FileRevision | str) -> ResourceView:
         """Return a new view pinned to a specific revision (fetches if given an id)."""
@@ -551,6 +690,10 @@ class ResourceView:
     def read_text(self, encoding: str = "utf-8") -> str:
         return self.read_bytes().decode(encoding)
 
+    def read_json(self) -> Any:
+        """Parse the effective revision's content as JSON (UTF-8)."""
+        return json.loads(self.read_text())
+
     def download(self, dest: str | Path) -> Path:
         """Download the effective revision's content to a local path.
 
@@ -590,6 +733,12 @@ class ResourceView:
         Walks ``revision.sources`` recursively, classifying each step as
         ``upload``, ``job_run``, ``promotion``, or ``derived``.  Returns
         ``None`` if the resource has no revisions.
+
+        Job invocations appear as ``Job`` nodes (with the job id and
+        ``function.name`` when available).  The tree is restructured to
+        read ``Artifact <- Job <- Model`` instead of the raw
+        ``Artifact <- [Model, parameters.json]`` the platform stores -- see
+        ``_build_lineage_node`` for details.
 
         Pinned views trace the lineage of the exact revision they point to;
         unpinned views trace the latest revision.
@@ -709,11 +858,13 @@ class ResourceView:
         sources: list[Any] | None = None,
         poll_interval: int = 5,
         promotion_relationship: str | None = "promoted_from",
+        on_poll: Callable[["JobView"], None] | None = None,
     ) -> JobView:
         """Submit, wait, and return the completed ``JobView``.
 
-        Same dispatch rules as ``submit_job``.  Raises ``RuntimeError`` if the
-        job fails or times out.
+        Same dispatch rules as ``submit_job``.  ``on_poll`` is forwarded to
+        ``JobView.wait`` for live status feedback (see ``wait``).  Raises
+        ``RuntimeError`` if the job fails or times out.
         """
         jv = self.submit_job(
             definition,
@@ -722,7 +873,11 @@ class ResourceView:
             sources=sources,
             promotion_relationship=promotion_relationship,
         )
-        return jv.wait(timeout=timeout, poll_interval=poll_interval).on_success()
+        return jv.wait(
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_poll=on_poll,
+        ).on_success()
 
 
 def _make_resource_view(
@@ -730,15 +885,35 @@ def _make_resource_view(
     client: IstariClient,
     *,
     pinned_revision: FileRevision | None = None,
+    revision_loader: Callable[[], FileRevision | None] | None = None,
 ) -> ResourceView:
     """Factory: return a ``ModelView`` for Model resources, else ``ResourceView``.
 
-    Used wherever we turn an SDK resource object into a view; keeps call sites
-    from having to type-check the resource themselves.
+    Dispatches on the real Python class (or on ``_LazyResource._resource_type``
+    when the resource is a lazy proxy).  ``revision_loader`` defers the
+    ``get_revision`` fetch until the caller actually touches the revision --
+    used by ``JobView.get_products(lazy=True)``.
     """
-    if isinstance(resource, Model):
-        return ModelView(_resource=resource, _client=client, _pinned_revision=pinned_revision)
-    return ResourceView(_resource=resource, _client=client, _pinned_revision=pinned_revision)
+    if isinstance(resource, _LazyResource):
+        type_name = resource._resource_type
+    elif isinstance(resource, Model):
+        type_name = "Model"
+    else:
+        type_name = type(resource).__name__
+
+    if type_name == "Model":
+        return ModelView(
+            _resource=resource,
+            _client=client,
+            _pinned_revision=pinned_revision,
+            _revision_loader=revision_loader,
+        )
+    return ResourceView(
+        _resource=resource,
+        _client=client,
+        _pinned_revision=pinned_revision,
+        _revision_loader=revision_loader,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +933,8 @@ class JobView:
     """
     _job: Job = field(repr=False)
     _client: IstariClient = field(repr=False)
+    _products_cache: list[ResourceView] | None = field(default=None, repr=False)
+    _cache_terminal: bool = field(default=False, repr=False)
 
     def __repr__(self) -> str:
         return f"Job({self.function_name!r}, status={self.status!r}, created={self.created!r}, id={self.id})"
@@ -803,8 +980,26 @@ class JobView:
 
     # -- actions ------------------------------------------------------------
 
-    def wait(self, timeout: int = 3600, poll_interval: int = 5) -> JobView:
+    def wait(
+        self,
+        timeout: int = 3600,
+        poll_interval: int = 5,
+        on_poll: Callable[["JobView"], None] | None = None,
+    ) -> JobView:
         """Block until the job reaches a terminal state or *timeout* seconds elapse.
+
+        ``on_poll`` -- optional callable invoked on every poll with the freshly
+        refreshed ``JobView``.  Use it to watch the status evolve::
+
+            # Quick one-liner (uses JobView.__repr__):
+            job.wait(on_poll=print)
+
+            # Custom format:
+            job.wait(on_poll=lambda j: print(f"[{j.status}] {j.id}"))
+
+        Anything callable works -- a lambda, a logger method, a progress-bar
+        updater, etc.  Exceptions raised by the callback are logged to stderr
+        and do not interrupt the wait loop.
 
         Returns ``self`` so calls can be chained::
 
@@ -815,6 +1010,12 @@ class JobView:
             job = self._client.get_job(self.id)
             self._job = job
             elapsed = time.time() - start
+
+            if on_poll is not None:
+                try:
+                    on_poll(self)
+                except Exception as exc:
+                    print(f"[wait] on_poll callback raised: {exc!r}", file=sys.stderr)
 
             if job.status.name == JobStatusName.PENDING:
                 msg = job.status.message
@@ -866,28 +1067,30 @@ class JobView:
             return self._job.file.revisions[-1]
         return None
 
-    def get_products(self, *, resource_type: str | None = None) -> list[ResourceView]:
-        """Return products generated by this job as pinned ``ResourceView``s.
+    def _is_terminal(self) -> bool:
+        """True when the job status is COMPLETED or FAILED.
 
-        Reads ``job.revision.products`` -- each ``Product`` points to the exact
-        ``FileRevision`` the agent wrote.  Each returned view is **pinned** to
-        that revision so the result stays race-safe even after newer revisions
-        land on the same artifact file.
-
-        ``resource_type`` (e.g. ``"Artifact"``) filters by the owning resource.
+        A terminal job's product list is immutable, so it's safe to cache.
         """
-        job = self._client.get_job(self.id)
-        self._job = job
+        status = getattr(self._job, "status", None)
+        name = getattr(status, "name", None) if status is not None else None
+        return name in (JobStatusName.COMPLETED, JobStatusName.FAILED)
+
+    def _build_product_views(self, lazy: bool) -> list[ResourceView]:
+        """Construct views for every product in ``self._job.revision.products``."""
         rev = self.revision
         if rev is None or not rev.products:
             return []
-        products = rev.products
-        if resource_type:
-            products = [p for p in products if p.resource_type == resource_type]
-
         views: list[ResourceView] = []
-        for p in products:
+        for p in rev.products:
             if not p.resource_type or not p.resource_id:
+                continue
+            if lazy:
+                views.append(_make_resource_view(
+                    _LazyResource(self._client, p.resource_type, p.resource_id),
+                    self._client,
+                    revision_loader=_make_revision_loader(self._client, p.revision_id),
+                ))
                 continue
             try:
                 r = self._client.get_resource(p.resource_type, p.resource_id)
@@ -900,6 +1103,58 @@ class JobView:
             except Exception:
                 pinned_rev = None
             views.append(_make_resource_view(r, self._client, pinned_revision=pinned_rev))
+        return views
+
+    def get_products(
+        self,
+        *,
+        resource_type: str | None = None,
+        refresh: bool = False,
+        lazy: bool = True,
+    ) -> list[ResourceView]:
+        """Return products generated by this job as pinned ``ResourceView``s.
+
+        Reads ``job.revision.products`` -- each ``Product`` points to the exact
+        ``FileRevision`` the agent wrote.  Each returned view is pinned to
+        that revision so the result stays race-safe even after newer revisions
+        land on the same artifact file.
+
+        ``resource_type`` (e.g. ``"Artifact"``) filters by the owning resource.
+
+        ``refresh`` forces a ``get_job`` round-trip and invalidates the cache.
+        Default ``False`` because ``wait()`` / ``platform.get_job()`` already
+        returned fresh state and, once the job is in a terminal state, its
+        product list is immutable.
+
+        ``lazy`` (default) returns views that fetch the owning resource and
+        the pinned revision on first access.  Cheap listing + per-view
+        expansion ends up paying fewer round-trips than the eager path when
+        the caller only inspects a subset of products.  Set ``lazy=False``
+        to pre-fetch everything (the historical behaviour).
+
+        Caching: once the job is terminal (COMPLETED / FAILED), the full
+        product list is cached on this ``JobView`` and subsequent calls cost
+        **zero API round-trips**.  Re-running a notebook cell like
+        ``products = job.get_products()`` is instant after the first hit.
+        The cached views memoise their lazy revision/resource loads, so
+        repeated attribute access is also free.
+        """
+        if refresh:
+            self._products_cache = None
+            self._cache_terminal = False
+
+        if self._products_cache is not None and self._cache_terminal:
+            views = self._products_cache
+        else:
+            if refresh or self.revision is None or not self._job.file:
+                self._job = self._client.get_job(self.id)
+            views = self._build_product_views(lazy=lazy)
+            if self._is_terminal():
+                self._products_cache = views
+                self._cache_terminal = True
+
+        if resource_type:
+            views = [v for v in views if v.type == resource_type]
         return views
 
     def find_product(
@@ -916,14 +1171,24 @@ class JobView:
         ``name`` matches against the revision's display name or file name.
         ``filename`` matches the revision's actual filename (``rev.name``).
         ``resource_type`` restricts the search to e.g. ``"Artifact"``.
+
+        Walks the cached product views built by ``get_products`` (lazy by
+        default) and short-circuits on the first match.  Because each view
+        memoises its pinned revision after the first access, repeated
+        ``find_product`` calls on the same job pay at most one
+        ``get_revision`` round-trip per *previously unseen* product and
+        **zero** round-trips for a product already inspected.  The owning
+        resource is never fetched unless the caller actually touches it.
         """
         if not name and not filename:
             raise ValueError("Provide name or filename")
-        for p in self.get_products(resource_type=resource_type):
-            if name and p.name == name:
-                return p
-            if filename and p.filename == filename:
-                return p
+
+        for view in self.get_products(resource_type=resource_type):
+            view_name = view.name
+            if name and view_name == name:
+                return view
+            if filename and view.filename == filename:
+                return view
         return None
 
     def attach_file(
@@ -1047,6 +1312,67 @@ class ModelView(ResourceView):
                 except Exception:
                     continue
         return results
+
+    def download_artifacts(
+        self,
+        dest: str | Path | None = None,
+        names: set[str] | None = None,
+        *,
+        auto_parse_json: bool = True,
+    ) -> dict[str, Any]:
+        """Download every artifact attached to this model (optionally filtered by *names*).
+
+        When *dest* is ``None``, returns a mapping ``artifact_name -> content``.  For
+        ``.json`` artifacts and *auto_parse_json* true, values are parsed ``dict`` /
+        ``list``; otherwise values are raw ``bytes``.  When *dest* is a directory,
+        artifacts are written there and an **empty** dict is returned (same behaviour as
+        the legacy ``istari_commons.download_artifacts`` helper).
+
+        Raises:
+            FileNotFoundError: *names* was given but no artifact on the model matched.
+        """
+        model = self.raw
+        artifacts = getattr(model, "artifacts", None) or []
+        output_dir = Path(dest) if dest is not None else None
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        out: dict[str, Any] = {}
+        matched = False
+        for artifact in artifacts:
+            aname = getattr(artifact, "name", None) or ""
+            if not aname:
+                continue
+            if names is not None and aname not in names:
+                continue
+            matched = True
+            raw_bytes = artifact.read_bytes()
+            if auto_parse_json and aname.endswith(".json"):
+                content: Any = json.loads(raw_bytes.decode("utf-8"))
+            else:
+                content = raw_bytes
+            if output_dir is not None:
+                out_path = output_dir / aname
+                if isinstance(content, (dict, list)):
+                    with open(out_path, "w", encoding="utf-8") as f:
+                        json.dump(content, f, indent=2, ensure_ascii=False)
+                else:
+                    out_path.write_bytes(content)
+            else:
+                out[aname] = content
+
+        if names is not None and not matched:
+            raise FileNotFoundError(f"No artifacts matched names={names!r}")
+
+        return out
+
+    def archive(self) -> None:
+        """Archive this model on the platform."""
+
+        mid = self.id
+        if not mid:
+            raise ValueError("Model has no id")
+        self._client.archive_model(mid)
 
 
 # ---------------------------------------------------------------------------
@@ -1449,20 +1775,43 @@ class IstariPlatform:
     def __init__(self, client: IstariClient):
         self._client = client
 
+    @property
+    def url(self) -> str | None:
+        """Registry URL the wrapped client is talking to, or ``None`` if unknown."""
+        cfg = getattr(self._client, "config", None) or getattr(self._client, "configuration", None)
+        return getattr(cfg, "registry_url", None) if cfg else None
+
     def __repr__(self) -> str:
-        url = getattr(self._client, '_registry_url', None) or '?'
-        return f"IstariPlatform(url={url!r})"
+        url = self.url or "<unknown>"
+        return f"IstariPlatform connected to {url}"
 
     @classmethod
-    def from_env(cls, dotenv_path: str = ".env") -> IstariPlatform:
+    def from_env(
+        cls,
+        dotenv_path: str = ".env",
+        *,
+        ca_bundle: str | Path | None = None,
+    ) -> IstariPlatform:
         """Create from ``ISTARI_REGISTRY_URL`` and ``ISTARI_PERSONAL_ACCESS_TOKEN``.
 
         These are the same variable names used by the official Istari Digital
         Python client documentation.  Set them in a ``.env`` file next to your
         script/notebook, or export them in your shell.
+
+        *ca_bundle* (or env ``ISTARI_CA_BUNDLE``) configures a custom CA file before
+        the client is constructed — required on some corporate networks.  See
+        ``configure_ssl_certificates``.
         """
         from dotenv import load_dotenv
         from istari_digital_client.configuration import Configuration
+
+        bundle = ca_bundle
+        if bundle is None:
+            env_bundle = (os.getenv("ISTARI_CA_BUNDLE") or "").strip()
+            if env_bundle:
+                bundle = env_bundle
+        if bundle:
+            configure_ssl_certificates(bundle)
 
         load_dotenv(dotenv_path)
         registry_url = os.getenv("ISTARI_REGISTRY_URL")
@@ -1545,6 +1894,30 @@ class IstariPlatform:
     def get_model(self, model_id: str) -> ModelView:
         model = self._client.get_model(model_id)
         return ModelView(_resource=model, _client=self._client)
+
+    def list_models(
+        self,
+        page_size: int = 100,
+        **list_kwargs: Any,
+    ) -> list[ModelView]:
+        """Return models visible to the account, one ``ModelView`` per model.
+
+        Walks every page of ``client.list_models`` until exhausted.  Extra
+        keyword arguments are forwarded (for example ``filter_by``,
+        ``archive_status``, or ``sort`` on the generated client).
+
+        Each list row is expanded with ``get_model`` so the returned
+        ``ModelView`` carries a full ``Model`` (including ``artifacts``).
+        """
+        entries = _paginate_manually(
+            self._client.list_models,
+            page_size=page_size,
+            **list_kwargs,
+        )
+        return [
+            ModelView(_resource=self._client.get_model(entry.id), _client=self._client)
+            for entry in entries
+        ]
 
     def find_model(
         self,
@@ -1710,11 +2083,6 @@ def _add_tracked_file(
     revision_id: str | None = None,
     config_name: str | None = None,
 ) -> SystemConfiguration:
-    from datetime import datetime
-    from istari_digital_client.v2.models.new_tracked_file import NewTrackedFile
-    from istari_digital_client.v2.models.tracked_file_specifier_type import TrackedFileSpecifierType
-    from istari_digital_client.v2.models.new_system_configuration import NewSystemConfiguration
-
     if revision_id:
         rev = client.get_revision(revision_id)
         tf = NewTrackedFile(

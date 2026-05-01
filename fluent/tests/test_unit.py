@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +15,8 @@ from istari_fluent.istari_utils import (
     JobView,
     ModelView,
     ResourceView,
+    _build_lineage_node,
+    configure_ssl_certificates,
 )
 
 
@@ -189,6 +193,47 @@ class TestJobView:
         assert result is jv
         _sleep.assert_not_called()
 
+    @patch("istari_fluent.istari_utils.time.sleep")
+    def test_wait_calls_on_poll_with_current_jobview(self, _sleep):
+        """on_poll fires every poll with the (refreshed) JobView."""
+        mock_client = MagicMock()
+        mock_client.get_job.side_effect = [
+            _make_job(JobStatusName.PENDING),
+            _make_job(JobStatusName.COMPLETED),
+        ]
+        jv = JobView(_job=_make_job(JobStatusName.PENDING), _client=mock_client)
+
+        seen: list[str] = []
+        jv.wait(timeout=10, poll_interval=0, on_poll=lambda j: seen.append(j.status))
+        assert seen == [JobStatusName.PENDING.value, JobStatusName.COMPLETED.value]
+
+    @patch("istari_fluent.istari_utils.time.sleep")
+    def test_wait_callback_exceptions_do_not_abort_loop(self, _sleep, capsys):
+        """A buggy callback logs to stderr but wait still completes."""
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = _make_job(JobStatusName.COMPLETED)
+        jv = JobView(_job=_make_job(JobStatusName.PENDING), _client=mock_client)
+
+        def boom(_):
+            raise RuntimeError("boom")
+
+        result = jv.wait(timeout=10, poll_interval=0, on_poll=boom)
+        assert result is jv
+        err = capsys.readouterr().err
+        assert "on_poll callback raised" in err
+        assert "RuntimeError" in err
+
+    @patch("istari_fluent.istari_utils.time.sleep")
+    def test_wait_on_poll_accepts_builtin_print(self, _sleep, capsys):
+        """Passing ``print`` directly uses JobView.__repr__ and writes to stdout."""
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = _make_job(JobStatusName.COMPLETED)
+        jv = JobView(_job=_make_job(JobStatusName.PENDING), _client=mock_client)
+
+        jv.wait(timeout=10, poll_interval=0, on_poll=print)
+        out = capsys.readouterr().out
+        assert "Job(" in out and JobStatusName.COMPLETED.value in out
+
     def test_get_products_returns_pinned_resource_views(self):
         product, resource, rev = _make_product_record(name="report.json")
         mock_job = _make_job_with_products("job-99", [product])
@@ -238,6 +283,168 @@ class TestJobView:
         jv = JobView(_job=mock_job, _client=client)
         assert jv.find_product(name="report.json") is not None
         assert jv.find_product(name="missing.json") is None
+
+    def test_find_product_short_circuits_without_extra_calls(self):
+        """find_product stops at the first match.
+
+        Pays 1 revision call per scanned candidate; the owning resource is
+        never fetched (lazy -- only loaded if the caller touches ``.file``).
+        """
+        hit_p, _hit_r, hit_rev = _make_product_record(
+            revision_id="rev-hit", resource_id="art-hit", name="target.json",
+        )
+        miss_p, _miss_r, miss_rev = _make_product_record(
+            revision_id="rev-miss", resource_id="art-miss", name="other.json",
+        )
+        mock_job = _make_job_with_products("job-99", [hit_p, miss_p])
+
+        client = MagicMock()
+        client.get_revision.side_effect = lambda rid: {
+            "rev-hit": hit_rev, "rev-miss": miss_rev,
+        }[rid]
+
+        jv = JobView(_job=mock_job, _client=client)
+        match = jv.find_product(name="target.json")
+
+        assert match is not None and match.name == "target.json"
+        client.get_job.assert_not_called()
+        assert client.get_revision.call_count == 1
+        assert client.get_revision.call_args.args == ("rev-hit",)
+        client.get_resource.assert_not_called()
+
+    def test_get_products_caches_when_job_is_terminal(self):
+        """A completed job's product list is immutable -- second call is free."""
+        product, _r, _rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product], status=JobStatusName.COMPLETED)
+        client = MagicMock()
+
+        jv = JobView(_job=mock_job, _client=client)
+        first = jv.get_products()
+        second = jv.get_products()
+
+        assert first == second
+        assert first[0] is second[0]
+        client.get_job.assert_not_called()
+        client.get_resource.assert_not_called()
+        client.get_revision.assert_not_called()
+
+    def test_get_products_cache_memoises_revision_across_calls(self):
+        """Touching .name on a cached view once loads the revision; second call is free."""
+        product, _r, rev = _make_product_record(name="out.json")
+        mock_job = _make_job_with_products("job-99", [product], status=JobStatusName.COMPLETED)
+        client = MagicMock()
+        client.get_revision.return_value = rev
+
+        jv = JobView(_job=mock_job, _client=client)
+        v1 = jv.get_products()[0]
+        assert v1.name == "out.json"
+        assert client.get_revision.call_count == 1
+
+        v2 = jv.get_products()[0]
+        assert v1 is v2
+        assert v2.name == "out.json"
+        assert client.get_revision.call_count == 1
+
+    def test_find_product_is_free_on_repeat_call(self):
+        """Cache + per-view memoisation: second find_product does zero round-trips."""
+        product, _r, rev = _make_product_record(name="out.json")
+        mock_job = _make_job_with_products("job-99", [product], status=JobStatusName.COMPLETED)
+        client = MagicMock()
+        client.get_revision.return_value = rev
+
+        jv = JobView(_job=mock_job, _client=client)
+        a = jv.find_product(name="out.json")
+        baseline_revisions = client.get_revision.call_count
+
+        b = jv.find_product(name="out.json")
+        assert a is b
+        assert client.get_revision.call_count == baseline_revisions
+        client.get_job.assert_not_called()
+
+    def test_get_products_refresh_true_invalidates_cache(self):
+        """refresh=True drops the cache and forces a get_job round-trip."""
+        product, _r, _rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product], status=JobStatusName.COMPLETED)
+        client = MagicMock()
+        client.get_job.return_value = mock_job
+
+        jv = JobView(_job=mock_job, _client=client)
+        jv.get_products()
+        client.get_job.assert_not_called()
+
+        jv.get_products(refresh=True)
+        client.get_job.assert_called_once_with("job-99")
+
+    def test_get_products_does_not_cache_non_terminal_job(self):
+        """Running / pending jobs keep re-reading the server (products may grow)."""
+        product, _r, _rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product], status=JobStatusName.RUNNING)
+        client = MagicMock()
+        client.get_job.return_value = mock_job
+
+        jv = JobView(_job=mock_job, _client=client)
+        assert jv._is_terminal() is False
+        jv.get_products()
+        jv.get_products()
+        assert jv._products_cache is None
+
+    def test_get_products_lazy_does_not_fetch_resources_or_revisions(self):
+        product, _resource, _rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product])
+        client = MagicMock()
+
+        jv = JobView(_job=mock_job, _client=client)
+        views = jv.get_products()  # lazy by default
+
+        assert len(views) == 1
+        client.get_job.assert_not_called()
+        client.get_resource.assert_not_called()
+        client.get_revision.assert_not_called()
+        assert views[0].is_pinned is True
+        assert views[0].id == "art-1"
+        assert views[0].type == "Artifact"
+
+    def test_get_products_lazy_loads_revision_on_first_access(self):
+        product, _resource, rev = _make_product_record(name="out.json")
+        mock_job = _make_job_with_products("job-99", [product])
+        client = MagicMock()
+        client.get_revision.return_value = rev
+
+        jv = JobView(_job=mock_job, _client=client)
+        (view,) = jv.get_products()
+
+        client.get_revision.assert_not_called()
+        _ = view.name
+        _ = view.name
+        assert client.get_revision.call_count == 1
+        client.get_resource.assert_not_called()
+
+    def test_get_products_refresh_forces_get_job(self):
+        product, resource, rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product])
+        client = MagicMock()
+        client.get_job.return_value = mock_job
+        client.get_resource.return_value = resource
+        client.get_revision.return_value = rev
+
+        jv = JobView(_job=mock_job, _client=client)
+        jv.get_products(refresh=True)
+        client.get_job.assert_called_once_with("job-99")
+
+    def test_get_products_eager_matches_legacy_behavior(self):
+        product, resource, rev = _make_product_record()
+        mock_job = _make_job_with_products("job-99", [product])
+        client = MagicMock()
+        client.get_job.return_value = mock_job
+        client.get_resource.return_value = resource
+        client.get_revision.return_value = rev
+
+        jv = JobView(_job=mock_job, _client=client)
+        views = jv.get_products(lazy=False)
+        assert len(views) == 1
+        client.get_resource.assert_called_once()
+        client.get_revision.assert_called_once()
+        assert views[0]._pinned_revision is rev
 
 
 # ---------------------------------------------------------------------------
@@ -416,3 +623,239 @@ class TestIstariPlatform:
         mock_client = MagicMock()
         mock_client.list_models.return_value = mock_page
         assert IstariPlatform(mock_client).find_model(name="Ghost") is None
+
+    def test_list_models_paginates_and_wraps_full_models(self):
+        m1 = MagicMock()
+        m1.id = "id-a"
+        m2 = MagicMock()
+        m2.id = "id-b"
+        page1 = MagicMock()
+        page1.items = [m1]
+        page1.pages = 2
+        page2 = MagicMock()
+        page2.items = [m2]
+        page2.pages = 2
+        mock_client = MagicMock()
+        mock_client.list_models.side_effect = [page1, page2]
+        mock_client.get_model.side_effect = lambda mid: _make_model(mid, f"N-{mid}")
+
+        views = IstariPlatform(mock_client).list_models()
+        assert len(views) == 2
+        assert {v.id for v in views} == {"id-a", "id-b"}
+        mock_client.get_model.assert_any_call("id-a")
+        mock_client.get_model.assert_any_call("id-b")
+
+    @patch("istari_fluent.istari_utils.IstariClient")
+    @patch("istari_digital_client.configuration.Configuration")
+    @patch("dotenv.load_dotenv")
+    def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _ic, monkeypatch, tmp_path):
+        bundle = tmp_path / "ca.pem"
+        bundle.write_text("dummy")
+        monkeypatch.setenv("ISTARI_CA_BUNDLE", str(bundle))
+        monkeypatch.setenv("ISTARI_REGISTRY_URL", "https://reg.example")
+        monkeypatch.setenv("ISTARI_PERSONAL_ACCESS_TOKEN", "tok")
+        with patch("istari_fluent.istari_utils.ssl.create_default_context"):
+            IstariPlatform.from_env(".env")
+        assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
+
+
+class TestResourceViewReadJson:
+    def test_read_json(self):
+        view, _ = _make_pinned_product_view(content=b'{"k": [1]}')
+        assert view.read_json() == {"k": [1]}
+
+
+class TestConfigureSsl:
+    def test_missing_bundle_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            configure_ssl_certificates(tmp_path / "nope.pem")
+
+    def test_sets_env_when_bundle_exists(self, tmp_path):
+        bundle = tmp_path / "ca.pem"
+        bundle.write_text("dummy-pem")
+        sentinel = object()
+        with patch("istari_fluent.istari_utils.ssl.create_default_context", return_value=sentinel) as m_ctx:
+            ctx = configure_ssl_certificates(bundle)
+        assert ctx is sentinel
+        m_ctx.assert_called_once()
+        assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
+
+
+class TestModelViewDownloadArtifacts:
+    def test_in_memory_json_and_bytes(self):
+        art_j = MagicMock()
+        art_j.name = "a.json"
+        art_j.read_bytes.return_value = b'{"x": 1}'
+        art_bin = MagicMock()
+        art_bin.name = "b.bin"
+        art_bin.read_bytes.return_value = b"\x01\x02"
+        model = _make_model()
+        object.__setattr__(model, "artifacts", [art_j, art_bin])
+        mv = ModelView(_resource=model, _client=MagicMock())
+        out = mv.download_artifacts()
+        assert out["a.json"] == {"x": 1}
+        assert out["b.bin"] == b"\x01\x02"
+
+    def test_filtered_miss_raises(self):
+        model = _make_model()
+        object.__setattr__(model, "artifacts", [])
+        mv = ModelView(_resource=model, _client=MagicMock())
+        with pytest.raises(FileNotFoundError):
+            mv.download_artifacts(names={"missing.json"})
+
+    def test_writes_directory_returns_empty_dict(self, tmp_path):
+        art = MagicMock()
+        art.name = "out.json"
+        art.read_bytes.return_value = b'{"z": true}'
+        model = _make_model()
+        object.__setattr__(model, "artifacts", [art])
+        mv = ModelView(_resource=model, _client=MagicMock())
+        assert mv.download_artifacts(dest=tmp_path) == {}
+        written = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+        assert written == {"z": True}
+
+
+class TestModelViewArchive:
+    def test_archive_calls_client(self):
+        mc = MagicMock()
+        mv = ModelView(_resource=_make_model("mid-1"), _client=mc)
+        mv.archive()
+        mc.archive_model.assert_called_once_with("mid-1")
+
+    def test_raises_when_no_model_id(self):
+        from istari_digital_client.v2.models import Model
+
+        bare = Model.__new__(Model)
+        object.__setattr__(bare, "id", "")
+        object.__setattr__(bare, "file", None)
+        object.__setattr__(bare, "artifacts", [])
+        mv = ModelView(_resource=bare, _client=MagicMock())
+        with pytest.raises(ValueError, match="no id"):
+            mv.archive()
+
+
+# ---------------------------------------------------------------------------
+# Lineage -- Job node restructuring
+# ---------------------------------------------------------------------------
+
+class TestLineageJobRestructuring:
+    """Raw platform graph: Artifact <- [Model, parameters.json <- Model].
+
+    Fluent tree: Artifact <- Job <- Model.  We surface the parameters
+    revision as a ``Job`` node and drop the redundant sibling Model.
+    """
+
+    def _make_rev(self, rev_id, name, sources=None, file_id=None):
+        r = MagicMock()
+        r.id = rev_id
+        r.name = name
+        r.display_name = name
+        r.file_id = file_id or f"file-{rev_id}"
+        r.created = None
+        r.sources = sources or []
+        return r
+
+    def _make_source(self, rev_id, resource_type, resource_id=None, relationship=None):
+        s = MagicMock()
+        s.revision_id = rev_id
+        s.resource_type = resource_type
+        s.resource_id = resource_id or f"res-{rev_id}"
+        s.relationship_identifier = relationship
+        return s
+
+    def _build(self, artifact_rev, revisions, *, job_function_name=None):
+        client = MagicMock()
+        client.get_revision.side_effect = lambda rid: revisions[rid]
+        client.get_file.side_effect = Exception
+        job = MagicMock()
+        job.function.name = job_function_name
+        client.get_job.return_value = job
+        return _build_lineage_node(
+            client, artifact_rev,
+            relationship_to_child=None, max_depth=5, depth=0, cache={},
+        )
+
+    def test_tree_reads_artifact_then_job_then_model(self):
+        """The Model sibling at the Artifact level is dropped; Model lives under Job."""
+        model_rev = self._make_rev("m-1", "input.xlsx")
+        params_rev = self._make_rev(
+            "p-1", "parameters_abc.json",
+            sources=[self._make_source("m-1", "Model", "mid-1")],
+        )
+        artifact_rev = self._make_rev(
+            "a-1", "workbook.xlsx",
+            sources=[
+                self._make_source("m-1", "Model", "mid-1"),
+                self._make_source("p-1", "Job", "job-abc"),
+            ],
+        )
+        revisions = {"m-1": model_rev, "p-1": params_rev, "a-1": artifact_rev}
+
+        root = self._build(artifact_rev, revisions, job_function_name="@istari:extract")
+
+        assert [p.resource_type for p in root.parents] == ["Job"]
+        job_node = root.parents[0]
+        assert job_node.step == "job_run"
+        assert job_node.resource_id == "job-abc"
+        assert job_node.function_name == "@istari:extract"
+        assert "@istari:extract" in job_node.label and "job-abc" in job_node.label
+
+        assert [p.resource_type for p in job_node.parents] == ["Model"]
+        model_node = job_node.parents[0]
+        assert model_node.step == "upload"
+        assert model_node.label == "input.xlsx"
+
+    def test_promoted_from_sibling_is_kept_alongside_job(self):
+        """A structural ``promoted_from`` source is preserved; plain Model sibling is dropped."""
+        model_rev = self._make_rev("m-1", "input.xlsx")
+        params_rev = self._make_rev(
+            "p-1", "parameters_abc.json",
+            sources=[self._make_source("m-1", "Model", "mid-1")],
+        )
+        promoted_src_rev = self._make_rev("pf-1", "source.xlsx")
+        artifact_rev = self._make_rev(
+            "a-1", "workbook.xlsx",
+            sources=[
+                self._make_source("m-1", "Model", "mid-1"),
+                self._make_source("p-1", "Job", "job-abc"),
+                self._make_source("pf-1", "Artifact", "art-1", relationship="promoted_from"),
+            ],
+        )
+        revisions = {
+            "m-1": model_rev, "p-1": params_rev,
+            "pf-1": promoted_src_rev, "a-1": artifact_rev,
+        }
+
+        root = self._build(artifact_rev, revisions)
+        kept = {(p.resource_type, p.relationship_to_child) for p in root.parents}
+        assert kept == {("Job", None), ("Artifact", "promoted_from")}
+
+    def test_job_node_falls_back_to_id_when_function_unavailable(self):
+        model_rev = self._make_rev("m-1", "input.xlsx")
+        params_rev = self._make_rev(
+            "p-1", "parameters_abc.json",
+            sources=[self._make_source("m-1", "Model", "mid-1")],
+        )
+        artifact_rev = self._make_rev(
+            "a-1", "workbook.xlsx",
+            sources=[
+                self._make_source("m-1", "Model", "mid-1"),
+                self._make_source("p-1", "Job", "job-abc"),
+            ],
+        )
+        revisions = {"m-1": model_rev, "p-1": params_rev, "a-1": artifact_rev}
+
+        client = MagicMock()
+        client.get_revision.side_effect = lambda rid: revisions[rid]
+        client.get_file.side_effect = Exception
+        client.get_job.side_effect = Exception
+
+        root = _build_lineage_node(
+            client, artifact_rev,
+            relationship_to_child=None, max_depth=5, depth=0, cache={},
+        )
+
+        (job_node,) = root.parents
+        assert job_node.resource_type == "Job"
+        assert job_node.function_name is None
+        assert job_node.label == "job (job-abc)"
