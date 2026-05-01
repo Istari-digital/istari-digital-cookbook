@@ -25,7 +25,7 @@ Keep these three pages handy while you work through the recipes — they are the
 
 | Notebook | What it shows |
 |---|---|
-| [`samples/01_getting_started.ipynb`](samples/01_getting_started.ipynb) | End-to-end walkthrough: connect, find or create a system, register a spreadsheet, run two chained extraction jobs, and trace the resulting lineage. |
+| [`samples/chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) | End-to-end walkthrough: connect, register a spreadsheet, run two chained extraction jobs, and trace the resulting lineage. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Extract metadata from a CATIA `.CATPart` using the official Python client. |
 
 Each notebook is self-contained and explains its own setup in the first cell — open the one you want and follow the prerequisites there.
