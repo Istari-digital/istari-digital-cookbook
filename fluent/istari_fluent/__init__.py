@@ -11,6 +11,7 @@ from istari_fluent.istari_utils import (
     JobView,
     LineageNode,
     JobDefinition,
+    configure_ssl_certificates,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "JobView",
     "LineageNode",
     "JobDefinition",
+    "configure_ssl_certificates",
 ]
