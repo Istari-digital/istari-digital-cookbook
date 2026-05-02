@@ -4,7 +4,8 @@ Istari SDK utilities -- object-oriented wrappers over the flat client API.
 Entity hierarchy
 ----------------
     IstariPlatform           (entry point, wraps Client)
-      +-- .list_models()            -> list[ModelView]  (paginated; full Model per row)
+      +-- .resources()              -> ResourceQuery (lazy, chainable; .type("model") etc.)
+      +-- .systems() / .jobs() / .files() / .artifacts() / ...  -> ItemQuery (lazy)
       +-- SystemView         (wraps System)
       |     +-- .baseline              -> SnapshotView
       |     +-- .configurations        -> list[ConfigurationView]
@@ -68,8 +69,9 @@ Quick start
     for cfg in system.configurations:
         print(cfg.name, len(cfg.get_models()))
 
-    # Find a model globally, submit a job, inspect outputs
-    model = platform.find_model(name="My Model")
+    # Find a model globally via the lazy resource query, submit a job, inspect outputs
+    item = platform.resources().type("model").filter(display_name="My Model").first()
+    model = platform.get_model(item.id)
     job = model.submit_job(JobDefinition(...)).wait().on_success()
     for p in job.get_products():
         rev = p.revision                  # exact revision the agent wrote
@@ -112,6 +114,8 @@ from istari_digital_client.v2.models import (
     UpdateTag,
 )
 from istari_digital_client import JobStatusName
+
+from istari_fluent.queries import ItemQuery, ResourceQuery
 
 
 # ---------------------------------------------------------------------------
@@ -1767,9 +1771,20 @@ class IstariPlatform:
 
         platform = IstariPlatform.from_env()
 
+        # Direct lookups by id
         system = platform.get_system("Berserker")
-        model  = platform.find_model(name="MQ-99 SFR")
         model  = platform.get_model("uuid-here")
+
+        # Lazy, chainable queries (see ItemQuery / ResourceQuery)
+        for s in platform.systems():
+            print(s.name)
+
+        item = (
+            platform.resources()
+            .type("model")
+            .filter(display_name="MQ-99 SFR")
+            .first()
+        )
     """
 
     def __init__(self, client: IstariClient):
@@ -1895,73 +1910,71 @@ class IstariPlatform:
         model = self._client.get_model(model_id)
         return ModelView(_resource=model, _client=self._client)
 
-    def list_models(
-        self,
-        page_size: int = 100,
-        **list_kwargs: Any,
-    ) -> list[ModelView]:
-        """Return models visible to the account, one ``ModelView`` per model.
+    # -- lazy, chainable queries -------------------------------------------
+    #
+    # Each of these returns an ``ItemQuery`` (or its resource-typed subclass
+    # ``ResourceQuery``) bound to the matching v2 ``list_*`` endpoint.
+    # Nothing hits the network until you iterate, slice, or count.  All v2
+    # filter parameters are forwarded through ``.filter(**kwargs)`` and
+    # ``.sort(field)``.
+    #
+    # ``resources()`` is the forward-compatible primary surface: V3 will
+    # collapse the per-type list endpoints into one resource endpoint, so
+    # call sites written today as
+    #     platform.resources().type("model").filter(...)
+    # will keep working with minimal changes.  The typed factories below are
+    # kept for first-class entities that don't live behind the resource
+    # endpoint (Systems, Jobs, Functions, ...).
 
-        Walks every page of ``client.list_models`` until exhausted.  Extra
-        keyword arguments are forwarded (for example ``filter_by``,
-        ``archive_status``, or ``sort`` on the generated client).
+    def resources(self) -> ResourceQuery:
+        """Lazy query against ``client.list_resources`` (any resource type).
 
-        Each list row is expanded with ``get_model`` so the returned
-        ``ModelView`` carries a full ``Model`` (including ``artifacts``).
+        Use ``.type("model")`` / ``.type("artifact")`` / ``.type("job")`` /
+        ``.type("document")`` / ``.type("comment")`` to narrow.  See
+        :class:`ResourceQuery` for the full filter set forwarded to the
+        underlying v2 endpoint (``file_name``, ``external_identifier``,
+        ``mime_type``, ``archive_status``, ``access_type``, ...).
         """
-        entries = _paginate_manually(
-            self._client.list_models,
-            page_size=page_size,
-            **list_kwargs,
-        )
-        return [
-            ModelView(_resource=self._client.get_model(entry.id), _client=self._client)
-            for entry in entries
-        ]
+        return ResourceQuery(self._client.list_resources)
 
-    def find_model(
-        self,
-        *,
-        name: str | None = None,
-        filename: str | None = None,
-        external_id: str | None = None,
-    ) -> ModelView | None:
-        """Search for a model by name, filename, or external_id.
+    def systems(self) -> ItemQuery[System]:
+        """Lazy query against ``client.list_systems``."""
+        return ItemQuery(self._client.list_systems)
 
-        ``name`` matches against the model's name/display_name (typically the
-        basename without extension).  ``filename`` matches against the file's
-        actual name including extension -- use this to disambiguate models that
-        share a basename but have different extensions.
+    def jobs(self, *, model_id: str | None = None) -> ItemQuery[Job]:
+        """Lazy query against ``client.list_jobs``.
 
-            model = platform.find_model(name="MQ-99 Berserker SFR SYSML Model")
-            model = platform.find_model(filename="Group3-UAS-Wing-v9.ntop")
-            model = platform.find_model(external_id="ext-123")
+        Pass ``model_id=...`` to scope to one model (uses the dedicated
+        ``list_model_jobs`` endpoint, which is faster than client-side
+        filtering on the generic listing).
         """
-        if not name and not filename and not external_id:
-            raise ValueError("Provide name, filename, or external_id")
-        page = self._client.list_models()
-        for m in page.iter_items():
-            if name and (m.name == name or getattr(m, "display_name", None) == name):
-                full = self._client.get_model(m.id)
-                return ModelView(_resource=full, _client=self._client)
-            if filename and m.file:
-                try:
-                    f = self._client.get_file(m.file.id)
-                    rev = f.revision
-                    if rev and rev.name == filename:
-                        full = self._client.get_model(m.id)
-                        return ModelView(_resource=full, _client=self._client)
-                except Exception:
-                    continue
-            if external_id and m.file:
-                try:
-                    f = self._client.get_file(m.file.id)
-                    if getattr(f, "external_identifier", None) == external_id:
-                        full = self._client.get_model(m.id)
-                        return ModelView(_resource=full, _client=self._client)
-                except Exception:
-                    continue
-        return None
+        if model_id is not None:
+            return ItemQuery(self._client.list_model_jobs, model_id=model_id)
+        return ItemQuery(self._client.list_jobs)
+
+    def files(self) -> ItemQuery[File]:
+        """Lazy query against ``client.list_files``."""
+        return ItemQuery(self._client.list_files)
+
+    def artifacts(self) -> ItemQuery[Any]:
+        """Lazy query against ``client.list_artifacts``."""
+        return ItemQuery(self._client.list_artifacts)
+
+    def snapshots(self) -> ItemQuery[Snapshot]:
+        """Lazy query against ``client.list_snapshots``."""
+        return ItemQuery(self._client.list_snapshots)
+
+    def functions(self) -> ItemQuery[Any]:
+        """Lazy query against ``client.list_functions`` (FunctionVersion items)."""
+        return ItemQuery(self._client.list_functions)
+
+    def modules(self) -> ItemQuery[Any]:
+        """Lazy query against ``client.list_modules``."""
+        return ItemQuery(self._client.list_modules)
+
+    def tools(self) -> ItemQuery[Any]:
+        """Lazy query against ``client.list_tools``."""
+        return ItemQuery(self._client.list_tools)
 
     def upload_model(
         self,
@@ -2005,12 +2018,6 @@ class IstariPlatform:
         if len(matches) > 1:
             raise ValueError(f"Multiple files named '{name}': {[f.id for f in matches]}")
         return matches[0]
-
-    # -- bulk queries -------------------------------------------------------
-
-    def list_modules(self) -> list[str]:
-        return [m.name for m in _paginate_manually(self._client.list_modules) if m.name]
-
 
 # ---------------------------------------------------------------------------
 # Internal implementation helpers (used by classes above)

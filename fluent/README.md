@@ -39,6 +39,9 @@ ISTARI_PERSONAL_ACCESS_TOKEN=your_personal_access_token
 
 ```
 IstariPlatform                (entry point)
+  +-- .resources()                   -> ResourceQuery  (lazy; .type("model") etc.)
+  +-- .systems() / .jobs() / .files() / .artifacts() / .snapshots() / ...
+  |                                  -> ItemQuery      (lazy, chainable, immutable)
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
   |     +-- .configurations          -> list[ConfigurationView]
@@ -123,10 +126,36 @@ new_cfg = (
 )
 ```
 
+### Find a model with the lazy resource query
+
+The platform exposes a chainable, immutable `ResourceQuery` that walks pages on
+demand. `.type("model")` narrows to model resources; any other v2
+`list_resources` filter (`display_name`, `file_name`, `external_identifier`,
+`mime_type`, `archive_status`, ...) goes through `.filter(**kwargs)`.
+
+```python
+# First match (only fetches the first matching page)
+item = platform.resources().type("model").filter(display_name="MQ-99").first()
+
+# All matches under a sort order, capped at 5
+recent = platform.resources().type("model").sort("-created").take(5)
+
+# Total count without iterating
+n = platform.resources().type("model").filter(archive_status="active").count()
+
+# Lift an item to a full ModelView when you need the heavier shape
+model = platform.get_model(item.id)
+```
+
+The same pattern works for `platform.systems()`, `platform.jobs(model_id=...)`,
+`platform.files()`, `platform.artifacts()`, `platform.snapshots()`,
+`platform.functions()`, `platform.modules()`, and `platform.tools()`.
+
 ### Submit a job and wait for results
 
 ```python
-model = platform.find_model(name="MQ-99 Berserker SFR SYSML Model")
+item  = platform.resources().type("model").filter(display_name="MQ-99 SFR").first()
+model = platform.get_model(item.id)
 
 job = model.submit_job(JobDefinition(
     input_json_data={"key": "value"},
@@ -162,7 +191,8 @@ labelled `"promoted_from"`), then the job runs on the promoted Model.
 
 ```python
 # Model -- direct
-model = platform.find_model(name="MQ-99 Berserker SFR SYSML Model")
+item  = platform.resources().type("model").filter(display_name="MQ-99 SFR").first()
+model = platform.get_model(item.id)
 job = model.run_job(JobDefinition(function="@istari:extract", tool_name="cameo"))
 
 # Artifact -- auto-promoted under the hood

@@ -238,3 +238,55 @@ fresh, consistent tree each time the user asks.
 
 Code: `JobView._is_terminal`, `JobView.get_products`, `JobView.find_product`,
 `_build_lineage_node(cache=...)` in `istari_fluent/istari_utils.py`.
+
+## 5. Chainable list queries (`ItemQuery` / `ResourceQuery`)
+
+Fluent exposes v2 paginated `list_*` endpoints the same way many libraries expose
+"queries you build first and run later": **immutable builders**, **lazy
+evaluation**, and **terminals** that trigger the minimum network work. Think
+Django `QuerySet` (chain `.filter()` / `.order_by()`, evaluate with `list()` or
+`.first()`), SQLAlchemy 2.x `select().where()`, or LINQ's deferred execution —
+not an ORM, but the same *ergonomic contract*.
+
+### Mapping to the v2 client
+
+Each factory on `IstariPlatform` binds a `Client` method that returns a
+`Page*` model (subclass of `Pageable`):
+
+- One initial `list_*` call is made with the accumulated kwargs (filters, sort,
+  optional `size`; default iteration uses `size=100`, the server maximum, to cut
+  round-trips — see `DEFAULT_PAGE_SIZE` in `queries.py`).
+- **Iteration** delegates to the SDK's `page.iter_items()` on that response, so
+  subsequent pages use the same `_list_method` / `_list_method_args` wiring the
+  client attaches after deserialization. That matches exactly how v2 pagination is
+  meant to be consumed; see `python-client-usage.md` (prefer `.iter_items()`
+  over relying on `for x in page` where the page type doesn't implement it).
+- **`count()` / `__len__`** issue a single `page=1`, `size=1` request and read
+  `page.total`, mirroring the lightweight "metadata only" pattern in that guide.
+
+`filter(**kwargs)` forwards keyword arguments verbatim to the underlying
+`list_*` signature (same names the OpenAPI/SDK use: `archive_status`, `sort`,
+`type_name` lists on resources, etc.). Passing `page` via `filter()` is unusual:
+you start mid-result-set on purpose; the iterator will not revisit earlier
+pages. `count()` always forces `page=1` and `size=1` so totals stay correct.
+
+### `list_resources` vs `search_resources`
+
+`ResourceQuery` is wired to **`client.list_resources`**: structured filters
+(types, names, archive state, ...). The v2 **`search_resources`** method is a
+different entry point — it takes a `FullTextSearch` payload for full-text
+search and returns another page type. Cookbook prose that says "search
+resources" in the informal sense means "list with filters"; fluent uses
+`list_resources` for that. Use `search_resources` from the raw `Client` when you
+need that dedicated FTS API.
+
+### Subclass: `ResourceQuery`
+
+`ResourceQuery` only adds `.type("model" | ...)` sugar that turns into
+`filter(type_name=[...])` with a single `ResourceType` for `list_resources`. Everything else
+inherits `ItemQuery` behaviour and stays immutable (`filter` / `sort` return new
+instances via `type(self)(...)`).
+
+Code: `ItemQuery`, `ResourceQuery` in `istari_fluent/queries.py`; factories in
+`IstariPlatform.resources`, `.systems`, `.jobs`, ... in
+`istari_fluent/istari_utils.py`.
