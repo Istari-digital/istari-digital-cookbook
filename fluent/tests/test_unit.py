@@ -600,50 +600,32 @@ class TestIstariPlatform:
         with pytest.raises(FileNotFoundError):
             platform.upload_model("/nonexistent/model.mdzip", external_id="ext-1")
 
-    def test_find_model_by_name_returns_model_view(self):
-        mock_candidate = MagicMock()
-        mock_candidate.id = "m-1"
-        mock_candidate.name = "Target Model"
-        mock_candidate.display_name = None
-        mock_candidate.file = None
-        mock_page = MagicMock()
-        mock_page.iter_items.return_value = [mock_candidate]
+    def test_systems_factory_returns_item_query_bound_to_list_systems(self):
+        from istari_fluent import ItemQuery
+
         mock_client = MagicMock()
-        mock_client.list_models.return_value = mock_page
-        mock_client.get_model.return_value = _make_model("m-1", "Target Model")
+        q = IstariPlatform(mock_client).systems()
+        assert isinstance(q, ItemQuery)
+        assert q._list_fn is mock_client.list_systems
 
-        platform = IstariPlatform(mock_client)
-        result = platform.find_model(name="Target Model")
-        assert result is not None
-        assert result.id == "m-1"
+    def test_jobs_factory_with_model_id_uses_dedicated_endpoint(self):
+        from istari_fluent import ItemQuery
 
-    def test_find_model_returns_none_when_not_found(self):
-        mock_page = MagicMock()
-        mock_page.iter_items.return_value = []
         mock_client = MagicMock()
-        mock_client.list_models.return_value = mock_page
-        assert IstariPlatform(mock_client).find_model(name="Ghost") is None
+        q_all = IstariPlatform(mock_client).jobs()
+        q_one = IstariPlatform(mock_client).jobs(model_id="m-42")
+        assert isinstance(q_all, ItemQuery) and isinstance(q_one, ItemQuery)
+        assert q_all._list_fn is mock_client.list_jobs
+        assert q_one._list_fn is mock_client.list_model_jobs
+        assert q_one._filters == {"model_id": "m-42"}
 
-    def test_list_models_paginates_and_wraps_full_models(self):
-        m1 = MagicMock()
-        m1.id = "id-a"
-        m2 = MagicMock()
-        m2.id = "id-b"
-        page1 = MagicMock()
-        page1.items = [m1]
-        page1.pages = 2
-        page2 = MagicMock()
-        page2.items = [m2]
-        page2.pages = 2
+    def test_resources_factory_returns_resource_query(self):
+        from istari_fluent import ResourceQuery
+
         mock_client = MagicMock()
-        mock_client.list_models.side_effect = [page1, page2]
-        mock_client.get_model.side_effect = lambda mid: _make_model(mid, f"N-{mid}")
-
-        views = IstariPlatform(mock_client).list_models()
-        assert len(views) == 2
-        assert {v.id for v in views} == {"id-a", "id-b"}
-        mock_client.get_model.assert_any_call("id-a")
-        mock_client.get_model.assert_any_call("id-b")
+        q = IstariPlatform(mock_client).resources()
+        assert isinstance(q, ResourceQuery)
+        assert q._list_fn is mock_client.list_resources
 
     @patch("istari_fluent.istari_utils.IstariClient")
     @patch("istari_digital_client.configuration.Configuration")
@@ -657,6 +639,132 @@ class TestIstariPlatform:
         with patch("istari_fluent.istari_utils.ssl.create_default_context"):
             IstariPlatform.from_env(".env")
         assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
+
+
+class TestItemQuery:
+    """Behaviour of the generic ItemQuery wrapper (queries.py)."""
+
+    @staticmethod
+    def _fake_list_fn(items, *, total=None):
+        """Build a list_fn whose response page yields ``items`` via iter_items."""
+        page = MagicMock()
+        page.iter_items.return_value = iter(items)
+        page.total = total if total is not None else len(items)
+        fn = MagicMock(return_value=page)
+        fn.__name__ = "list_fake"
+        return fn, page
+
+    def test_iter_yields_items_via_iter_items(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([{"id": 1}, {"id": 2}])
+        q = ItemQuery(fn)
+        assert list(iter(q)) == [{"id": 1}, {"id": 2}]
+        fn.assert_called_once()
+
+    def test_iter_defaults_to_max_page_size(self):
+        from istari_fluent import ItemQuery
+        from istari_fluent.queries import DEFAULT_PAGE_SIZE
+
+        fn, _ = self._fake_list_fn([])
+        list(ItemQuery(fn))
+        assert fn.call_args.kwargs["size"] == DEFAULT_PAGE_SIZE
+
+    def test_filter_returns_new_immutable_query(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([])
+        base = ItemQuery(fn, archive_status="active")
+        narrowed = base.filter(status_name="completed")
+        assert base is not narrowed
+        assert base._filters == {"archive_status": "active"}
+        assert narrowed._filters == {"archive_status": "active", "status_name": "completed"}
+
+    def test_filter_overrides_existing_key(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([])
+        q = ItemQuery(fn, size=10).filter(size=50)
+        assert q._filters == {"size": 50}
+
+    def test_sort_sets_sort_field(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([])
+        q = ItemQuery(fn).sort("-created")
+        assert q._filters == {"sort": "-created"}
+
+    def test_first_returns_first_item_or_none(self):
+        from istari_fluent import ItemQuery
+
+        fn_full, _ = self._fake_list_fn([{"id": 1}, {"id": 2}])
+        fn_empty, _ = self._fake_list_fn([])
+        assert ItemQuery(fn_full).first() == {"id": 1}
+        assert ItemQuery(fn_empty).first() is None
+
+    def test_take_returns_at_most_n_items(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([{"id": i} for i in range(5)])
+        assert ItemQuery(fn).take(3) == [{"id": 0}, {"id": 1}, {"id": 2}]
+
+    def test_all_materialises_full_iterator(self):
+        from istari_fluent import ItemQuery
+
+        items = [{"id": i} for i in range(4)]
+        fn, _ = self._fake_list_fn(items)
+        assert ItemQuery(fn).all() == items
+
+    def test_count_uses_page_total_with_size_one(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([{"id": 1}], total=4242)
+        q = ItemQuery(fn).filter(archive_status="active")
+        assert q.count() == 4242
+        assert len(q) == 4242
+        for call in fn.call_args_list:
+            assert call.kwargs["page"] == 1
+            assert call.kwargs["size"] == 1
+            assert call.kwargs["archive_status"] == "active"
+
+    def test_repr_describes_query(self):
+        from istari_fluent import ItemQuery
+
+        fn, _ = self._fake_list_fn([])
+        r = repr(ItemQuery(fn).filter(archive_status="active").sort("-created"))
+        assert "list_fake" in r
+        assert "archive_status='active'" in r
+        assert "sort='-created'" in r
+
+
+class TestResourceQuery:
+    """ResourceQuery adds ``.type(...)`` sugar on top of ItemQuery."""
+
+    def test_type_filters_by_resource_type_enum(self):
+        from istari_digital_client.v2.models.resource_type import ResourceType
+        from istari_fluent import ResourceQuery
+
+        fn = MagicMock()
+        fn.__name__ = "list_resources"
+        q = ResourceQuery(fn).type("model")
+        assert q._filters == {"type_name": [ResourceType.MODEL]}
+
+    def test_type_accepts_enum_directly(self):
+        from istari_digital_client.v2.models.resource_type import ResourceType
+        from istari_fluent import ResourceQuery
+
+        fn = MagicMock()
+        fn.__name__ = "list_resources"
+        q = ResourceQuery(fn).type(ResourceType.ARTIFACT)
+        assert q._filters == {"type_name": [ResourceType.ARTIFACT]}
+
+    def test_type_returns_resource_query_so_chain_keeps_subtype(self):
+        from istari_fluent import ResourceQuery
+
+        fn = MagicMock()
+        fn.__name__ = "list_resources"
+        q = ResourceQuery(fn).type("model").filter(file_name="x.pdf")
+        assert isinstance(q, ResourceQuery)
 
 
 class TestResourceViewReadJson:
