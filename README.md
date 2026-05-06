@@ -1,4 +1,4 @@
-# Istari Digital Client Cookbook
+# Istari Digital Cookbook
 
 Runnable recipes for driving the [Istari Digital Platform](https://istaridigital.com) from Python — small notebooks you can open, run, and adapt into your own workflows.
 
