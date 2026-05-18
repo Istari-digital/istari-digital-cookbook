@@ -157,8 +157,12 @@ class ResourceQuery(ItemQuery[ResourceSearchItem]):
         """Restrict the query to a single resource type.
 
         ``type_name`` accepts either the enum value or a string such as
-        ``"model"``, ``"artifact"``, ``"job"``, ``"document"``, ``"comment"``,
-        or ``"resource"`` (the catch-all for anything not specialised).
+        ``"model"``, ``"artifact"``, or ``"document"``.
+        **File-backed uploads** (standalone files) list as **``artifact``** in
+        v2; ``"resource"`` is a catch-all enum value in the API but maps to
+        artifacts for typical file rows. **Jobs** are listed with
+        ``type_name=job`` when using this endpoint, but load them with
+        :meth:`IstariPlatform.get_job` — not :meth:`IstariPlatform.get_resource`.
 
         Currently re-applying ``type()`` overrides the previous selection.
         Pass a list explicitly via ``filter(type_name=[...])`` to query

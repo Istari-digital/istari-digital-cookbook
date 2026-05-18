@@ -40,7 +40,7 @@ ISTARI_PERSONAL_ACCESS_TOKEN=your_personal_access_token
 ```
 IstariPlatform                (entry point)
   +-- .resources()                   -> ResourceQuery  (lazy; .type("model") etc.)
-  +-- .systems() / .jobs() / .files() / .artifacts() / .snapshots() / ...
+  +-- .systems() / .jobs() / .agents() / .files() / .artifacts() / .snapshots() / ...
   |                                  -> ItemQuery      (lazy, chainable, immutable)
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
@@ -147,7 +147,7 @@ n = platform.resources().type("model").filter(archive_status="active").count()
 model = platform.get_model(item.id)
 ```
 
-The same pattern works for `platform.systems()`, `platform.jobs(model_id=...)`,
+The same pattern works for `platform.systems()`, `platform.agents()`, `platform.jobs(model_id=...)`,
 `platform.files()`, `platform.artifacts()`, `platform.snapshots()`,
 `platform.functions()`, `platform.modules()`, and `platform.tools()`.
 

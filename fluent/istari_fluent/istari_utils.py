@@ -5,7 +5,7 @@ Entity hierarchy
 ----------------
     IstariPlatform           (entry point, wraps Client)
       +-- .resources()              -> ResourceQuery (lazy, chainable; .type("model") etc.)
-      +-- .systems() / .jobs() / .files() / .artifacts() / ...  -> ItemQuery (lazy)
+      +-- .systems() / .jobs() / .agents() / .files() / .artifacts() / ...  -> ItemQuery (lazy)
       +-- SystemView         (wraps System)
       |     +-- .baseline              -> SnapshotView
       |     +-- .configurations        -> list[ConfigurationView]
@@ -36,7 +36,7 @@ Entity hierarchy
       |     +-- .wait()                -> self (chainable)
       |     +-- .on_success()          -> self or raise
       |     +-- .completed / .failed   bool properties
-      +-- ResourceView        (unified wrapper for Artifact / Model / Job / ...)
+      +-- ResourceView        (unified wrapper for Artifact / Model / …)
       |     +-- .id / .type / .raw / .file / .latest_revision
       |     +-- .revision              -> FileRevision  (pinned if set, else latest)
       |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
@@ -139,6 +139,67 @@ def _paginate_manually(
             break
         page += 1
     return items
+
+
+def _v2_resource_class_name_for_get(resource_type: Any) -> str:
+    """Map fluent / ``list_resources`` types to PascalCase names for ``Client.get_resource``.
+
+    The v2 client compares string literals (``\"Model\"``, ``\"Artifact\"``, …).
+    Standalone uploaded **files** are **Artifact** resources; the catch-all
+    ``ResourceType.RESOURCE`` (slug ``\"resource\"``) is treated as **Artifact**
+    so list/search rows still load.
+
+    **Jobs** are not supported here — they are not “resources” in this API
+    surface. Use :meth:`IstariPlatform.get_job` instead.
+    """
+    from istari_digital_client.v2.models.resource_type import ResourceType as RT
+
+    def _reject_job() -> None:
+        raise TypeError(
+            "Jobs are not resources: use platform.get_job(job_id), not get_resource()."
+        )
+
+    if isinstance(resource_type, RT):
+        slug = resource_type.value
+        if slug == RT.JOB.value:
+            _reject_job()
+        if slug == RT.RESOURCE.value:
+            return "Artifact"
+        table_rt = {
+            RT.MODEL.value: "Model",
+            RT.ARTIFACT.value: "Artifact",
+            RT.COMMENT.value: "Comment",
+            RT.DOCUMENT.value: "Document",
+        }
+        if slug in table_rt:
+            return table_rt[slug]
+        return slug[:1].upper() + slug[1:] if slug else "Model"
+
+    text = str(resource_type).strip()
+    if text == "Job" or text.lower() == "job":
+        _reject_job()
+    if text in (
+        "Model",
+        "Artifact",
+        "Comment",
+        "Document",
+        "FunctionAuthSecretEntity",
+    ):
+        return text
+    key = text.lower()
+    if key == RT.RESOURCE.value:
+        return "Artifact"
+    if key == RT.JOB.value:
+        _reject_job()
+    table = {
+        "model": "Model",
+        "artifact": "Artifact",
+        "comment": "Comment",
+        "document": "Document",
+    }
+    if key in table:
+        return table[key]
+    raise ValueError(f"Unsupported resource_type for get_resource: {resource_type!r}")
 
 
 def configure_ssl_certificates(bundle_path: str | Path) -> ssl.SSLContext:
@@ -541,12 +602,12 @@ def _promote_revision_to_model(
 
 
 # ---------------------------------------------------------------------------
-# ResourceView  --  unified wrapper over any Resource (Artifact/Model/Job/...)
+# ResourceView  --  unified wrapper over any Resource (Artifact, Model, …)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ResourceView:
-    """Wraps a platform Resource (Artifact, Model, Job, ...) with an optional
+    """Wraps a platform Resource (Artifact, Model, …) with an optional
     revision pin.
 
     A ``ResourceView`` plays two roles depending on whether ``_pinned_revision``
@@ -559,7 +620,7 @@ class ResourceView:
       ``JobView.get_products()`` carries the exact revision the agent wrote,
       even if newer revisions land later (race-safe).
 
-        # Unpinned -- current state
+        # Unpinned -- current state (``Artifact`` = file-backed resource in v2)
         artifact = platform.get_resource("Artifact", "art-1")
         artifact.name, artifact.read_bytes()      # from latest revision
 
@@ -1774,6 +1835,7 @@ class IstariPlatform:
         # Direct lookups by id
         system = platform.get_system("Berserker")
         model  = platform.get_model("uuid-here")
+        view   = platform.get_resource("artifact", "uuid-here")
 
         # Lazy, chainable queries (see ItemQuery / ResourceQuery)
         for s in platform.systems():
@@ -1910,6 +1972,74 @@ class IstariPlatform:
         model = self._client.get_model(model_id)
         return ModelView(_resource=model, _client=self._client)
 
+    def get_resource(self, resource_type: Any, resource_id: str) -> ResourceView | ModelView:
+        """Load a resource by type and id — same contract as v2 ``Client.get_resource``.
+
+        *resource_type* can be a :class:`~istari_digital_client.v2.models.resource_type.ResourceType`
+        enum value, a lowercase slug (``\"model\"``, ``\"artifact\"``), or the
+        exact PascalCase string the API expects (``\"Model\"``, ``\"Artifact\"``).
+
+        **Models** return :class:`ModelView`. Everything else (e.g. **artifacts**)
+        returns :class:`ResourceView`.
+
+        **Jobs** are not supported — use :meth:`get_job`.
+
+        The ``\"resource\"`` slug from legacy listings is mapped to **Artifact**.
+        """
+        key = _v2_resource_class_name_for_get(resource_type)
+        r = self._client.get_resource(key, resource_id)
+        if isinstance(r, Model):
+            return ModelView(_resource=r, _client=self._client)
+        return ResourceView(_resource=r, _client=self._client)
+
+    def get_revision(self, revision_id: str) -> FileRevision:
+        """Return a single file revision by id (for downloads / lineage checks)."""
+        return self._client.get_revision(revision_id)
+
+    def put_text_file(
+        self,
+        text: str,
+        *,
+        filename: str,
+        model_id: str | None = None,
+        display_name: str | None = None,
+        external_identifier: str | None = None,
+        version_name: str | None = None,
+        description: str | None = None,
+    ) -> Model:
+        """Write UTF-8 *text* to a temp file and ``add_model`` or ``update_model``.
+
+        Registers a **Model** resource (the platform ties the backing ``File``
+        to that model). When *model_id* is set, the bytes become a **new
+        revision** on that model’s file.
+
+        *filename* sets the on-disk upload basename (add a suffix if needed;
+        bare names get ``.txt``). Optional kwargs mirror the client.
+        """
+        path = Path(filename)
+        if path.suffix == "":
+            path = path.with_suffix(".txt")
+        with tempfile.TemporaryDirectory() as td:
+            upload = Path(td) / path.name
+            upload.write_text(text, encoding="utf-8")
+            eff_display = display_name or path.stem
+            if model_id is None:
+                return self._client.add_model(
+                    upload,
+                    display_name=eff_display,
+                    description=description,
+                    version_name=version_name,
+                    external_identifier=external_identifier,
+                )
+            return self._client.update_model(
+                model_id,
+                upload,
+                display_name=eff_display,
+                description=description,
+                version_name=version_name,
+                external_identifier=external_identifier,
+            )
+
     # -- lazy, chainable queries -------------------------------------------
     #
     # Each of these returns an ``ItemQuery`` (or its resource-typed subclass
@@ -1929,9 +2059,10 @@ class IstariPlatform:
     def resources(self) -> ResourceQuery:
         """Lazy query against ``client.list_resources`` (any resource type).
 
-        Use ``.type("model")`` / ``.type("artifact")`` / ``.type("job")`` /
-        ``.type("document")`` / ``.type("comment")`` to narrow.  See
-        :class:`ResourceQuery` for the full filter set forwarded to the
+        Use ``.type("model")`` / ``.type("artifact")`` / ``.type("document")`` /
+        ``.type("comment")`` to narrow.  Standalone **file** uploads are **artifacts**
+        in v2.  Do not use ``get_resource`` for jobs — use :meth:`get_job`.
+        See :class:`ResourceQuery` for the full filter set forwarded to the
         underlying v2 endpoint (``file_name``, ``external_identifier``,
         ``mime_type``, ``archive_status``, ``access_type``, ...).
         """
@@ -1975,6 +2106,10 @@ class IstariPlatform:
     def tools(self) -> ItemQuery[Any]:
         """Lazy query against ``client.list_tools``."""
         return ItemQuery(self._client.list_tools)
+
+    def agents(self) -> ItemQuery[Any]:
+        """Lazy query against ``client.list_agents``."""
+        return ItemQuery(self._client.list_agents)
 
     def upload_model(
         self,
