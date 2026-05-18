@@ -627,6 +627,74 @@ class TestIstariPlatform:
         assert isinstance(q, ResourceQuery)
         assert q._list_fn is mock_client.list_resources
 
+    def test_get_resource_wraps_model_as_model_view(self):
+        mock_client = MagicMock()
+        mock_client.get_resource.return_value = _make_model("mid-1")
+        v = IstariPlatform(mock_client).get_resource("model", "mid-1")
+        assert isinstance(v, ModelView)
+        mock_client.get_resource.assert_called_once_with("Model", "mid-1")
+
+    def test_get_resource_rejects_job_slug_and_enum(self):
+        from istari_digital_client.v2.models.resource_type import ResourceType
+
+        mock_client = MagicMock()
+        with pytest.raises(TypeError, match="not resources"):
+            IstariPlatform(mock_client).get_resource("Job", "x")
+        with pytest.raises(TypeError, match="not resources"):
+            IstariPlatform(mock_client).get_resource(ResourceType.JOB, "x")
+        mock_client.get_resource.assert_not_called()
+
+    def test_get_resource_maps_list_slug_resource_to_artifact(self):
+        from istari_digital_client.v2.models.resource_type import ResourceType
+
+        art = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get_resource.return_value = art
+        IstariPlatform(mock_client).get_resource(ResourceType.RESOURCE, "rid-1")
+        mock_client.get_resource.assert_called_once_with("Artifact", "rid-1")
+
+    def test_get_revision_delegates_to_client(self):
+        mock_client = MagicMock()
+        rev = MagicMock()
+        mock_client.get_revision.return_value = rev
+        out = IstariPlatform(mock_client).get_revision("rev-9")
+        assert out is rev
+        mock_client.get_revision.assert_called_once_with("rev-9")
+
+    def test_put_text_file_add_and_update(self):
+        mock_client = MagicMock()
+        created = MagicMock()
+        created.id = "mid-1"
+        mock_client.add_model.return_value = created
+        mock_client.update_model = MagicMock(return_value=created)
+        platform = IstariPlatform(mock_client)
+        platform.put_text_file(
+            "hello",
+            filename="demo.txt",
+            external_identifier="ext-1",
+            version_name="v1",
+        )
+        mock_client.add_model.assert_called_once()
+        assert mock_client.add_model.call_args.kwargs["version_name"] == "v1"
+        assert mock_client.add_model.call_args.kwargs["external_identifier"] == "ext-1"
+        platform.put_text_file(
+            "next rev",
+            filename="demo.txt",
+            model_id="mid-1",
+            version_name="v2",
+        )
+        mock_client.update_model.assert_called_once()
+        assert mock_client.update_model.call_args[0][0] == "mid-1"
+        assert mock_client.update_model.call_args.kwargs["version_name"] == "v2"
+
+    def test_agents_factory_returns_item_query_bound_to_list_agents(self):
+        from istari_fluent import ItemQuery
+
+        mock_client = MagicMock()
+        q = IstariPlatform(mock_client).agents()
+        assert isinstance(q, ItemQuery)
+        assert q._list_fn is mock_client.list_agents
+
     @patch("istari_fluent.istari_utils.IstariClient")
     @patch("istari_digital_client.configuration.Configuration")
     @patch("dotenv.load_dotenv")
