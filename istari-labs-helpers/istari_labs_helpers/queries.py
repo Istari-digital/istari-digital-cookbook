@@ -11,13 +11,13 @@ Nothing hits the network until you iterate, take a slice, or ask for a
 count.  The classes are immutable: every ``filter``/``sort``/``type`` call
 returns a fresh query, so the same base query can be forked and reused.
 Pagination walks full result sets via the v2 client's ``Page.iter_items()``;
-see ``fluent/python-client-usage.md`` for how wired pages fetch subsequent
+see ``istari-labs-helpers/python-client-usage.md`` for how wired pages fetch subsequent
 pages.
 
 This module is unaware of any specific entity type: ``ItemQuery`` works
 against any v2 paginated list method whose response page exposes the
 SDK's ``iter_items()`` helper.  Domain knowledge lives in the factory
-methods on :class:`istari_fluent.IstariPlatform`.
+methods on :class:`istari_labs_helpers.IstariPlatform`.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class ItemQuery(Generic[T]):
 
     Example::
 
-        from istari_fluent import IstariPlatform
+        from istari_labs_helpers import IstariPlatform
 
         platform = IstariPlatform.from_env()
 
@@ -157,8 +157,12 @@ class ResourceQuery(ItemQuery[ResourceSearchItem]):
         """Restrict the query to a single resource type.
 
         ``type_name`` accepts either the enum value or a string such as
-        ``"model"``, ``"artifact"``, ``"job"``, ``"document"``, ``"comment"``,
-        or ``"resource"`` (the catch-all for anything not specialised).
+        ``"model"``, ``"artifact"``, or ``"document"``.
+        **File-backed uploads** (standalone files) list as **``artifact``** in
+        v2; ``"resource"`` is a catch-all enum value in the API but maps to
+        artifacts for typical file rows. **Jobs** are listed with
+        ``type_name=job`` when using this endpoint, but load them with
+        :meth:`IstariPlatform.get_job` — not :meth:`IstariPlatform.get_resource`.
 
         Currently re-applying ``type()`` overrides the previous selection.
         Pass a list explicitly via ``filter(type_name=[...])`` to query

@@ -913,7 +913,7 @@ wheels = [
 ]
 
 [[package]]
-name = "istari-digital-fluent-client"
+name = "istari-labs-helpers"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

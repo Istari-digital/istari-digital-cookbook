@@ -32,6 +32,10 @@ dev = [
     "nbformat>=5.10.4",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Notebooks: nbqa joins cells with separators; imports in later cells trigger E402 falsely.
+"**/*.ipynb" = ["E402"]
+
 [tool.nbqa.config]
 addopts = ["--nbqa-mutate"]
 
