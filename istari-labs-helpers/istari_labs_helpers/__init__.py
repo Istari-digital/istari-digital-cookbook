@@ -1,7 +1,7 @@
-"""Istari fluent client - opinionated, chainable wrapper over istari-digital-client."""
+"""Istari labs helpers — opinionated, chainable wrapper over istari-digital-client."""
 
-from istari_fluent.queries import ItemQuery, ResourceQuery
-from istari_fluent.istari_utils import (
+from istari_labs_helpers.queries import ItemQuery, ResourceQuery
+from istari_labs_helpers.istari_utils import (
     IstariPlatform,
     SystemView,
     SnapshotView,

@@ -11,13 +11,13 @@ Nothing hits the network until you iterate, take a slice, or ask for a
 count.  The classes are immutable: every ``filter``/``sort``/``type`` call
 returns a fresh query, so the same base query can be forked and reused.
 Pagination walks full result sets via the v2 client's ``Page.iter_items()``;
-see ``fluent/python-client-usage.md`` for how wired pages fetch subsequent
+see ``istari-labs-helpers/python-client-usage.md`` for how wired pages fetch subsequent
 pages.
 
 This module is unaware of any specific entity type: ``ItemQuery`` works
 against any v2 paginated list method whose response page exposes the
 SDK's ``iter_items()`` helper.  Domain knowledge lives in the factory
-methods on :class:`istari_fluent.IstariPlatform`.
+methods on :class:`istari_labs_helpers.IstariPlatform`.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class ItemQuery(Generic[T]):
 
     Example::
 
-        from istari_fluent import IstariPlatform
+        from istari_labs_helpers import IstariPlatform
 
         platform = IstariPlatform.from_env()
 

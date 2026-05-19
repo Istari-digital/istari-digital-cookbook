@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from istari_fluent import IstariPlatform, JobDefinition
+from istari_labs_helpers import IstariPlatform, JobDefinition
 
 pytestmark = pytest.mark.integration
 
@@ -38,8 +38,8 @@ def test_upload_xlsx(platform: IstariPlatform):
     """Upload the UAS requirements spreadsheet and verify the model is created."""
     model = platform.upload_model(
         XLSX_FILE,
-        external_id="fluent-client-test-uas-requirements",
-        display_name="Group3-UAS-Requirements (fluent client test)",
+        external_id="labs-helpers-client-test-uas-requirements",
+        display_name="Group3-UAS-Requirements (labs helpers client test)",
     )
     assert model.id
     assert model.name
@@ -49,8 +49,8 @@ def test_upload_extract_and_download_product(platform: IstariPlatform, tmp_path:
     """Full end-to-end: upload -> extract -> check products -> download one."""
     model = platform.upload_model(
         XLSX_FILE,
-        external_id="fluent-client-test-uas-e2e",
-        display_name="Group3-UAS-Requirements (fluent client e2e)",
+        external_id="labs-helpers-client-test-uas-e2e",
+        display_name="Group3-UAS-Requirements (labs helpers client e2e)",
     )
 
     job = model.run_job(

@@ -54,7 +54,7 @@ Entity hierarchy
 
 Quick start
 -----------
-    from istari_fluent import IstariPlatform, configure_ssl_certificates
+    from istari_labs_helpers import IstariPlatform, configure_ssl_certificates
 
     configure_ssl_certificates("/path/to/ca.pem")   # optional — corporate TLS only
     platform = IstariPlatform.from_env()             # or: from_env(ca_bundle="...")
@@ -115,7 +115,7 @@ from istari_digital_client.v2.models import (
 )
 from istari_digital_client import JobStatusName
 
-from istari_fluent.queries import ItemQuery, ResourceQuery
+from istari_labs_helpers.queries import ItemQuery, ResourceQuery
 
 
 # ---------------------------------------------------------------------------
@@ -1958,7 +1958,7 @@ class IstariPlatform:
         if existing is not None:
             return existing
         created = self._client.create_system(
-            NewSystem(name=name, description=description or f"Created by istari_fluent for '{name}'"),
+            NewSystem(name=name, description=description or f"Created by istari_labs_helpers for '{name}'"),
         )
         return SystemView(_system=created, _client=self._client)
 

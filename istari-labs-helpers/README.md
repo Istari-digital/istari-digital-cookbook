@@ -1,18 +1,22 @@
-# istari-digital-fluent-client
+# istari-labs-helpers
 
 Entity-oriented wrapper over the [Istari Digital](https://www.istaridigital.com/) Python client. Exposes systems, configurations, models, jobs, and artifacts as chainable objects instead of flat SDK calls.
 
-> **Status**: an opinionated, higher-level layer maintained alongside the official [`istari-digital-client`](https://docs.istaridigital.com/developers/SDK/api_reference/). It is intended to make common workflows shorter and safer, but it is not the officially supported SDK -- for production integrations, the core client remains the source of truth.
+> **Status**: an opinionated, higher-level layer maintained alongside the official [`istari-digital-client`](https://docs.istaridigital.com/developers/SDK/api_reference/). It is intended to make common workflows shorter and safer, but it is not the officially supported SDK — for production integrations, the core client remains the source of truth.
 
 ## Install
 
+This package is developed inside the [client cookbook](https://github.com/Istari-digital/istari-digital-client-cookbook). It is **not** published to PyPI as of this repository; install from a checkout:
+
 ```bash
-pip install istari-digital-fluent-client
+pip install -e ./istari-labs-helpers
+# or: uv pip install -e ./istari-labs-helpers
 ```
 
-Or with [uv](https://github.com/astral-sh/uv) from source:
+Or clone this cookbook, `cd` into `istari-labs-helpers/`, then sync dev dependencies with [uv](https://docs.astral.sh/uv/):
 
 ```bash
+cd istari-labs-helpers
 uv sync
 ```
 
@@ -82,7 +86,7 @@ IstariPlatform                (entry point)
 All examples assume:
 
 ```python
-from istari_fluent import IstariPlatform, JobDefinition
+from istari_labs_helpers import IstariPlatform, JobDefinition
 
 platform = IstariPlatform.from_env()  # reads .env
 ```
@@ -273,8 +277,8 @@ The integration suite uploads `Group3-UAS-Requirements.xlsx`, runs `open_spreads
 ## Project layout
 
 ```
-fluent/
-  istari_fluent/         package source (istari_utils.py, __init__.py)
+istari-labs-helpers/
+  istari_labs_helpers/   package source (istari_utils.py, __init__.py)
   tests/                 pytest suite
   pyproject.toml         project and build config
   .env.example           environment variable template

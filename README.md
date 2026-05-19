@@ -23,14 +23,14 @@ Keep these three pages handy while you work through the recipes — they are the
 
 ## Recipes
 
-The notebooks cover the same platform concepts whether they use **`istari_fluent`** or the official **`istari-digital-client`** directly. Pick the style you prefer; pairs such as [`chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) and [`chaining_jobs_no_helper.ipynb`](samples/chaining_jobs_no_helper.ipynb) illustrate the same flow both ways.
+The notebooks cover the same platform concepts whether they use **`istari_labs_helpers`** (this repo’s labs helper library) or the official **`istari-digital-client`** directly. Pick the style you prefer; pairs such as [`chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) and [`chaining_jobs_no_helper.ipynb`](samples/chaining_jobs_no_helper.ipynb) illustrate the same flow both ways.
 
 | Notebook | API style | What it shows |
 |---|---|---|
-| [`samples/chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) | `istari_fluent` | Connect, register a spreadsheet as a model, run two chained extraction jobs, trace lineage. |
+| [`samples/chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) | `istari_labs_helpers` | Connect, register a spreadsheet as a model, run two chained extraction jobs, trace lineage. |
 | [`samples/chaining_jobs_no_helper.ipynb`](samples/chaining_jobs_no_helper.ipynb) | Official client (`istari_digital_client`) | Same chained-job story as above, using the v2 `Client` API only. |
-| [`samples/misc_recipes.ipynb`](samples/misc_recipes.ipynb) | `istari_fluent` | Short, independent snippets (agents, resources, archiving, and similar). |
-| [`samples/resources/resources_misc_fluent.ipynb`](samples/resources/resources_misc_fluent.ipynb) | `istari_fluent` | Model registration, text uploads, search, and bulk patterns for platform resources. |
+| [`samples/misc_recipes.ipynb`](samples/misc_recipes.ipynb) | `istari_labs_helpers` | Short, independent snippets (agents, resources, archiving, and similar). |
+| [`samples/resources/resources_misc_labs_helpers.ipynb`](samples/resources/resources_misc_labs_helpers.ipynb) | `istari_labs_helpers` | Model registration, text uploads, search, and bulk patterns for platform resources. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Official client (`istari_digital`) | Extract metadata from a CATIA `.CATPart`. |
 
 Each notebook is self-contained and explains its own setup in the first cell — open the one you want and follow the prerequisites there.
@@ -44,14 +44,14 @@ Each notebook is self-contained and explains its own setup in the first cell —
 ## Repository layout
 
 ```
-samples/         Tutorial notebooks — start here
-integrations/    Notebooks for specific tool integrations (CATIA, ...)
-fluent/          istari_fluent — helper library and package source (see below)
+samples/              Tutorial notebooks — start here
+integrations/         Notebooks for specific tool integrations (CATIA, ...)
+istari-labs-helpers/  istari_labs_helpers — helper library package source (see below)
 ```
 
-### The `istari_fluent` helper library
+### The `istari_labs_helpers` package (`istari-labs-helpers`)
 
-**Fluent** here means a [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface): methods return objects you can **chain** in one expression, and the API is **object-oriented** around platform concepts (for example `IstariPlatform`, `Job`, queries) instead of scattering raw `Client` calls. `istari_fluent` is a thin convenience layer **on top of** the official [`istari-digital-client`](https://docs.istaridigital.com/developers/SDK/setup); it does not replace the SDK.
+The API follows a **fluent interface** style: methods return objects you can **chain**, and the surface is **object-oriented** around platform concepts (for example `IstariPlatform`, `Job`, queries) instead of scattering raw `Client` calls everywhere. **`istari_labs_helpers`** is a thin convenience layer **on top of** the official [`istari-digital-client`](https://docs.istaridigital.com/developers/SDK/setup); it does not replace the SDK.
 
 Where it helps day to day:
 
@@ -59,44 +59,44 @@ Where it helps day to day:
 - **Composable queries** (for example resource search) that read like the task you are performing, not like manual pagination glue.
 - **Notebook-friendly ergonomics** so recipes stay short and focused on the platform behavior, not on orchestration details.
 
-`istari_fluent` is maintained in this cookbook repository alongside the samples; for production integrations, keep **`istari-digital-client`** as your supported source of truth. Many recipes here demonstrate **either** the fluent layer **or** the official client directly — same platform, different surface area.
+This helper library is maintained in this cookbook repository alongside the samples; for production integrations, keep **`istari-digital-client`** as your supported source of truth. Many recipes here demonstrate **either** `istari_labs_helpers` **or** the official client directly — same platform, different surface area.
 
-### Using the fluent package in your own scripts
+### Using `istari_labs_helpers` in your own scripts
 
-The Python distribution name in [`fluent/pyproject.toml`](fluent/pyproject.toml) is **`istari-digital-fluent-client`**, but you **`import istari_fluent`**. The package is **not published to PyPI** (as of this repo); install it **from a checkout of this repository** next to your project, or copy the `fluent/` tree if your policy allows.
+The Python distribution name in [`istari-labs-helpers/pyproject.toml`](istari-labs-helpers/pyproject.toml) is **`istari-labs-helpers`**; you **`import istari_labs_helpers`**. The package is **not published to PyPI** (as of this repo); install it **from a checkout of this repository** next to your project, or copy the `istari-labs-helpers/` tree if your policy allows.
 
 **Recommended: editable install** (picks up changes when you `git pull` the cookbook):
 
-From the directory that contains `fluent/` (the cookbook root):
+From the directory that contains `istari-labs-helpers/` (the cookbook root):
 
 ```bash
 # uv
-uv pip install -e ./fluent
+uv pip install -e ./istari-labs-helpers
 
 # or pip
-pip install -e ./fluent
+pip install -e ./istari-labs-helpers
 ```
 
-That pulls in **`istari-digital-client`**, **`python-dotenv`**, and **Pydantic** per the package metadata. Use your own virtual environment; the cookbook notebooks often use `uv sync --project fluent --extra experiment` for a kernel with Jupyter, which also installs `istari_fluent` in editable mode.
+That pulls in **`istari-digital-client`**, **`python-dotenv`**, and **Pydantic** per the package metadata. Use your own virtual environment; the cookbook notebooks often use `uv sync --project istari-labs-helpers --extra experiment` for a kernel with Jupyter, which also installs `istari_labs_helpers` in editable mode.
 
 **Install a built wheel** (frozen snapshot of whatever you built):
 
 ```bash
-cd fluent
+cd istari-labs-helpers
 uv build   # or: pip install build && python -m build
-pip install dist/istari_digital_fluent_client-*.whl
+pip install dist/istari_labs_helpers-*.whl
 ```
 
-**Without installing the package**, you can add the `fluent/` directory to `PYTHONPATH` when running a script (fragile if paths move, but fine for quick experiments):
+**Without installing the package**, you can add the `istari-labs-helpers/` directory to `PYTHONPATH` when running a script (fragile if paths move, but fine for quick experiments):
 
 ```bash
-PYTHONPATH="/path/to/istari-digital-client-cookbook/fluent:$PYTHONPATH" python your_script.py
+PYTHONPATH="/path/to/istari-digital-client-cookbook/istari-labs-helpers:$PYTHONPATH" python your_script.py
 ```
 
 In code, the usual entry point matches the notebooks:
 
 ```python
-from istari_fluent import IstariPlatform
+from istari_labs_helpers import IstariPlatform
 
 platform = IstariPlatform.from_env()
 ```

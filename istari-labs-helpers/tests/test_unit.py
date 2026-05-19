@@ -1,4 +1,4 @@
-"""Unit tests for istari_fluent views -- no live API required."""
+"""Unit tests for istari_labs_helpers views -- no live API required."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from istari_digital_client import JobStatusName
-from istari_fluent.istari_utils import (
+from istari_labs_helpers.istari_utils import (
     IstariPlatform,
     JobDefinition,
     JobView,
@@ -184,7 +184,7 @@ class TestJobView:
         with pytest.raises(RuntimeError, match="did not complete"):
             jv.on_success()
 
-    @patch("istari_fluent.istari_utils.time.sleep")
+    @patch("istari_labs_helpers.istari_utils.time.sleep")
     def test_wait_returns_self_immediately_when_already_complete(self, _sleep):
         mock_client = MagicMock()
         mock_client.get_job.return_value = _make_job(JobStatusName.COMPLETED)
@@ -193,7 +193,7 @@ class TestJobView:
         assert result is jv
         _sleep.assert_not_called()
 
-    @patch("istari_fluent.istari_utils.time.sleep")
+    @patch("istari_labs_helpers.istari_utils.time.sleep")
     def test_wait_calls_on_poll_with_current_jobview(self, _sleep):
         """on_poll fires every poll with the (refreshed) JobView."""
         mock_client = MagicMock()
@@ -207,7 +207,7 @@ class TestJobView:
         jv.wait(timeout=10, poll_interval=0, on_poll=lambda j: seen.append(j.status))
         assert seen == [JobStatusName.PENDING.value, JobStatusName.COMPLETED.value]
 
-    @patch("istari_fluent.istari_utils.time.sleep")
+    @patch("istari_labs_helpers.istari_utils.time.sleep")
     def test_wait_callback_exceptions_do_not_abort_loop(self, _sleep, capsys):
         """A buggy callback logs to stderr but wait still completes."""
         mock_client = MagicMock()
@@ -223,7 +223,7 @@ class TestJobView:
         assert "on_poll callback raised" in err
         assert "RuntimeError" in err
 
-    @patch("istari_fluent.istari_utils.time.sleep")
+    @patch("istari_labs_helpers.istari_utils.time.sleep")
     def test_wait_on_poll_accepts_builtin_print(self, _sleep, capsys):
         """Passing ``print`` directly uses JobView.__repr__ and writes to stdout."""
         mock_client = MagicMock()
@@ -479,7 +479,7 @@ class TestModelView:
         assert kwargs["tool_name"] == "cameo"
         assert kwargs["operating_system"] == "RHEL 8"
 
-    @patch("istari_fluent.istari_utils.time.sleep")
+    @patch("istari_labs_helpers.istari_utils.time.sleep")
     def test_run_job_submits_waits_and_returns_completed_job(self, _sleep):
         mock_client = MagicMock()
         mock_client.add_job.return_value = _make_job(JobStatusName.PENDING)
@@ -601,7 +601,7 @@ class TestIstariPlatform:
             platform.upload_model("/nonexistent/model.mdzip", external_id="ext-1")
 
     def test_systems_factory_returns_item_query_bound_to_list_systems(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         mock_client = MagicMock()
         q = IstariPlatform(mock_client).systems()
@@ -609,7 +609,7 @@ class TestIstariPlatform:
         assert q._list_fn is mock_client.list_systems
 
     def test_jobs_factory_with_model_id_uses_dedicated_endpoint(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         mock_client = MagicMock()
         q_all = IstariPlatform(mock_client).jobs()
@@ -620,7 +620,7 @@ class TestIstariPlatform:
         assert q_one._filters == {"model_id": "m-42"}
 
     def test_resources_factory_returns_resource_query(self):
-        from istari_fluent import ResourceQuery
+        from istari_labs_helpers import ResourceQuery
 
         mock_client = MagicMock()
         q = IstariPlatform(mock_client).resources()
@@ -688,14 +688,14 @@ class TestIstariPlatform:
         assert mock_client.update_model.call_args.kwargs["version_name"] == "v2"
 
     def test_agents_factory_returns_item_query_bound_to_list_agents(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         mock_client = MagicMock()
         q = IstariPlatform(mock_client).agents()
         assert isinstance(q, ItemQuery)
         assert q._list_fn is mock_client.list_agents
 
-    @patch("istari_fluent.istari_utils.IstariClient")
+    @patch("istari_labs_helpers.istari_utils.IstariClient")
     @patch("istari_digital_client.configuration.Configuration")
     @patch("dotenv.load_dotenv")
     def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _ic, monkeypatch, tmp_path):
@@ -704,7 +704,7 @@ class TestIstariPlatform:
         monkeypatch.setenv("ISTARI_CA_BUNDLE", str(bundle))
         monkeypatch.setenv("ISTARI_REGISTRY_URL", "https://reg.example")
         monkeypatch.setenv("ISTARI_PERSONAL_ACCESS_TOKEN", "tok")
-        with patch("istari_fluent.istari_utils.ssl.create_default_context"):
+        with patch("istari_labs_helpers.istari_utils.ssl.create_default_context"):
             IstariPlatform.from_env(".env")
         assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
 
@@ -723,7 +723,7 @@ class TestItemQuery:
         return fn, page
 
     def test_iter_yields_items_via_iter_items(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([{"id": 1}, {"id": 2}])
         q = ItemQuery(fn)
@@ -731,15 +731,15 @@ class TestItemQuery:
         fn.assert_called_once()
 
     def test_iter_defaults_to_max_page_size(self):
-        from istari_fluent import ItemQuery
-        from istari_fluent.queries import DEFAULT_PAGE_SIZE
+        from istari_labs_helpers import ItemQuery
+        from istari_labs_helpers.queries import DEFAULT_PAGE_SIZE
 
         fn, _ = self._fake_list_fn([])
         list(ItemQuery(fn))
         assert fn.call_args.kwargs["size"] == DEFAULT_PAGE_SIZE
 
     def test_filter_returns_new_immutable_query(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([])
         base = ItemQuery(fn, archive_status="active")
@@ -749,21 +749,21 @@ class TestItemQuery:
         assert narrowed._filters == {"archive_status": "active", "status_name": "completed"}
 
     def test_filter_overrides_existing_key(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([])
         q = ItemQuery(fn, size=10).filter(size=50)
         assert q._filters == {"size": 50}
 
     def test_sort_sets_sort_field(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([])
         q = ItemQuery(fn).sort("-created")
         assert q._filters == {"sort": "-created"}
 
     def test_first_returns_first_item_or_none(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn_full, _ = self._fake_list_fn([{"id": 1}, {"id": 2}])
         fn_empty, _ = self._fake_list_fn([])
@@ -771,20 +771,20 @@ class TestItemQuery:
         assert ItemQuery(fn_empty).first() is None
 
     def test_take_returns_at_most_n_items(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([{"id": i} for i in range(5)])
         assert ItemQuery(fn).take(3) == [{"id": 0}, {"id": 1}, {"id": 2}]
 
     def test_all_materialises_full_iterator(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         items = [{"id": i} for i in range(4)]
         fn, _ = self._fake_list_fn(items)
         assert ItemQuery(fn).all() == items
 
     def test_count_uses_page_total_with_size_one(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([{"id": 1}], total=4242)
         q = ItemQuery(fn).filter(archive_status="active")
@@ -796,7 +796,7 @@ class TestItemQuery:
             assert call.kwargs["archive_status"] == "active"
 
     def test_repr_describes_query(self):
-        from istari_fluent import ItemQuery
+        from istari_labs_helpers import ItemQuery
 
         fn, _ = self._fake_list_fn([])
         r = repr(ItemQuery(fn).filter(archive_status="active").sort("-created"))
@@ -810,7 +810,7 @@ class TestResourceQuery:
 
     def test_type_filters_by_resource_type_enum(self):
         from istari_digital_client.v2.models.resource_type import ResourceType
-        from istari_fluent import ResourceQuery
+        from istari_labs_helpers import ResourceQuery
 
         fn = MagicMock()
         fn.__name__ = "list_resources"
@@ -819,7 +819,7 @@ class TestResourceQuery:
 
     def test_type_accepts_enum_directly(self):
         from istari_digital_client.v2.models.resource_type import ResourceType
-        from istari_fluent import ResourceQuery
+        from istari_labs_helpers import ResourceQuery
 
         fn = MagicMock()
         fn.__name__ = "list_resources"
@@ -827,7 +827,7 @@ class TestResourceQuery:
         assert q._filters == {"type_name": [ResourceType.ARTIFACT]}
 
     def test_type_returns_resource_query_so_chain_keeps_subtype(self):
-        from istari_fluent import ResourceQuery
+        from istari_labs_helpers import ResourceQuery
 
         fn = MagicMock()
         fn.__name__ = "list_resources"
@@ -850,7 +850,7 @@ class TestConfigureSsl:
         bundle = tmp_path / "ca.pem"
         bundle.write_text("dummy-pem")
         sentinel = object()
-        with patch("istari_fluent.istari_utils.ssl.create_default_context", return_value=sentinel) as m_ctx:
+        with patch("istari_labs_helpers.istari_utils.ssl.create_default_context", return_value=sentinel) as m_ctx:
             ctx = configure_ssl_certificates(bundle)
         assert ctx is sentinel
         m_ctx.assert_called_once()

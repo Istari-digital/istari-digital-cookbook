@@ -1,6 +1,6 @@
 # Design notes
 
-Notes on a few subsystems of `istari_fluent` that are not obvious from
+Notes on a few subsystems of `istari_labs_helpers` that are not obvious from
 the public API. Every chapter documents **what the platform actually does**,
 **what the fluent client pretends is happening** (so the provenance / perf /
 ergonomics story is clean), and **where in the code the mapping lives**.
@@ -75,7 +75,7 @@ Read top-down: Job 2 produced `named_cells.json`; Job 2 ran on the promoted
   referenced from multiple parents of the tree.
 
 Code: `LineageNode`, `_classify_step`, `_build_lineage_node` in
-`istari_fluent/istari_utils.py`.
+`istari_labs_helpers/istari_utils.py`.
 
 ## 2. Auto-promote to Model when running a job on an Artifact
 
@@ -110,7 +110,7 @@ above naturally materialises, because the input Model that Job 2 ran on was
 the auto-promoted Model linked to `workbook.xlsx` via `promoted_from`.
 
 Code: `ResourceView.submit_job` / `run_job` dispatch in
-`istari_fluent/istari_utils.py`, helper `_promote_revision_to_model`, helper
+`istari_labs_helpers/istari_utils.py`, helper `_promote_revision_to_model`, helper
 `_submit_job_impl`.
 
 ## 3. Lazy approach
@@ -180,7 +180,7 @@ and prefer to pay the cost up front.
 
 Code: `_LazyResource`, `_make_revision_loader`, `_make_resource_view`,
 `ResourceView.revision`/`ResourceView.is_pinned`, and
-`JobView._build_product_views` in `istari_fluent/istari_utils.py`.
+`JobView._build_product_views` in `istari_labs_helpers/istari_utils.py`.
 
 ## 4. Cache
 
@@ -237,7 +237,7 @@ fresh, consistent tree each time the user asks.
   a fresh latest revision, re-fetch via `platform.get_resource(...)`.
 
 Code: `JobView._is_terminal`, `JobView.get_products`, `JobView.find_product`,
-`_build_lineage_node(cache=...)` in `istari_fluent/istari_utils.py`.
+`_build_lineage_node(cache=...)` in `istari_labs_helpers/istari_utils.py`.
 
 ## 5. Chainable list queries (`ItemQuery` / `ResourceQuery`)
 
@@ -287,6 +287,6 @@ need that dedicated FTS API.
 inherits `ItemQuery` behaviour and stays immutable (`filter` / `sort` return new
 instances via `type(self)(...)`).
 
-Code: `ItemQuery`, `ResourceQuery` in `istari_fluent/queries.py`; factories in
+Code: `ItemQuery`, `ResourceQuery` in `istari_labs_helpers/queries.py`; factories in
 `IstariPlatform.resources`, `.systems`, `.jobs`, ... in
-`istari_fluent/istari_utils.py`.
+`istari_labs_helpers/istari_utils.py`.
