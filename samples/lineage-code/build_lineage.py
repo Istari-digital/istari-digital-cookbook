@@ -415,11 +415,10 @@ def render_ascii_tree(tree: dict[str, Any]) -> str:
                 or "?"
             )
 
-        edge = ""
-        if not is_root:
-            rel = node.get("edge_relationship")
-            if rel and rel != "-":
-                edge = f"  [via {rel}]"
+        # Match the legacy print_tree placeholder: every non-root node gets a
+        # "[via X]" suffix, and a missing relationship renders as "[via -]"
+        # rather than being silently dropped.
+        edge = "" if is_root else f"  [via {node.get('edge_relationship') or '-'}]"
 
         lines.append(f"{prefix}- {rtype} '{label}'{edge}")
         lines.append(f"{prefix}    step={node.get('step')}  rev={rev_id}")

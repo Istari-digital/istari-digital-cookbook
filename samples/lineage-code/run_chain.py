@@ -82,12 +82,12 @@ def require_completed(job):
 def find_product_by_filename(job, filename: str):
     """Find a product on the job's latest revision matching ``filename``.
 
-    Caller passes a completed job (its file.revision is already populated);
-    no re-fetch needed.
+    Caller passes a completed job (its file.revisions list is already
+    populated); no re-fetch needed.
     """
     if not job.file or not job.file.revisions:
         return None, None
-    for p in job.file.revision.products or []:
+    for p in job.file.revisions[-1].products or []:
         if p.resource_type and p.resource_id and p.revision_id:
             rrev = p.revision
             if rrev is not None and rrev.name == filename:
