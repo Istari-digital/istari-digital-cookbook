@@ -129,10 +129,26 @@ class UserCache:
         self._cache[user_id] = record
         return record
 
+    def __len__(self) -> int:
+        return len(self._cache)
+
 
 # ---------------------------------------------------------------------------
 # Lineage tree
 # ---------------------------------------------------------------------------
+
+@dataclass
+class WalkContext:
+    """Internal context handed back from ``walk_system`` for the v2 uploader.
+
+    Carries the SDK objects we need to create a follow-on system configuration
+    without polluting the JSON payload that ``main`` writes to disk. ``None``
+    when we walked a single resource/revision (no system).
+    """
+    base_cfg: Any
+    tracked_files: list[TrackedFile]
+    existing_config_names: list[str]
+
 
 @dataclass
 class LineageNode:
@@ -149,16 +165,14 @@ class LineageNode:
     file_id: str | None
     resource_type: str | None  # "Model" | "Artifact" | "Job" | ...
     resource_id: str | None
-    name: str | None
+    name: str | None  # the revision's filename, e.g. "workbook.xlsx"
     display_name: str | None
-    filename: str | None
     mime: str | None
     size: int | None
     external_identifier: str | None
     created: str | None  # ISO 8601
     created_by: dict[str, Any] | None
-    # Job-only enrichment (populated when resource_type == "Job")
-    job: dict[str, Any] | None = None
+    job: dict[str, Any] | None = None  # populated when resource_type == "Job"
     parents: list["LineageNode"] = field(default_factory=list)
     truncated: bool = False
 
@@ -279,7 +293,6 @@ def build_lineage(
         resource_id=resource_id,
         name=rev.name,
         display_name=rev.display_name,
-        filename=rev.name,
         mime=rev.mime,
         size=rev.size,
         external_identifier=rev.external_identifier,
@@ -322,42 +335,7 @@ def build_lineage(
 
 
 # ---------------------------------------------------------------------------
-# Pretty printer
-# ---------------------------------------------------------------------------
-
-def print_tree(node: LineageNode, indent: int = 0, is_root: bool = True) -> None:
-    prefix = "  " * indent
-    res = node.resource_type or "Revision"
-    edge = "" if is_root else f"  [via {node.edge_relationship or '-'}]"
-    print(f"{prefix}- {res} {node.label!r}{edge}")
-    print(f"{prefix}    step={node.step}  rev={node.revision_id}")
-    if node.resource_id:
-        print(f"{prefix}    {res.lower()}_id={node.resource_id}")
-    if node.file_id:
-        print(f"{prefix}    file_id={node.file_id}")
-    if node.created:
-        who = (node.created_by or {}).get("display_name") or (node.created_by or {}).get("email") or (node.created_by or {}).get("id") or "?"
-        print(f"{prefix}    created={node.created}  by={who}")
-    if node.job:
-        fn = node.job.get("function") or {}
-        print(
-            f"{prefix}    function={fn.get('name')} v{fn.get('version')} "
-            f"module={fn.get('module_name')} tool={fn.get('tool_name')}"
-        )
-        print(f"{prefix}    status={node.job.get('current_status')}  agent={node.job.get('agent_id')}")
-    if node.truncated:
-        print(f"{prefix}    ... (truncated: max_depth reached)")
-    for p in node.parents:
-        print_tree(p, indent + 1, is_root=False)
-
-
-def node_to_dict(node: LineageNode) -> dict[str, Any]:
-    out = asdict(node)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Markdown + mermaid rendering
+# Markdown rendering
 # ---------------------------------------------------------------------------
 
 def _ui_base_from_registry(registry_url: str) -> str:
@@ -377,9 +355,9 @@ def _short(uuid: str | None, n: int = 8) -> str:
     return (uuid or "")[:n]
 
 
-def _user_label(user: dict[str, Any] | None) -> str:
+def _user_label(user: dict[str, Any] | None, *, markdown: bool = True) -> str:
     if not user:
-        return "_unknown_"
+        return "_unknown_" if markdown else "unknown"
     name = user.get("display_name") or (
         f"{user.get('first_name') or ''} {user.get('last_name') or ''}".strip()
     )
@@ -390,7 +368,8 @@ def _user_label(user: dict[str, Any] | None) -> str:
         return name
     if email:
         return email
-    return f"_service_ `{_short(user.get('id'))}`"
+    short_id = _short(user.get("id"))
+    return f"_service_ `{short_id}`" if markdown else f"service {short_id}"
 
 
 def _ui_link(ui_base: str, kind: str, uuid: str | None) -> str:
@@ -450,11 +429,9 @@ def render_ascii_tree(tree: dict[str, Any]) -> str:
             lines.append(f"{prefix}    file_id={node.get('file_id')}")
         created = node.get("created")
         if created:
-            by_label = _user_label(node.get("created_by"))
-            # The markdown variant of _user_label includes markdown bold markers;
-            # strip those for the ASCII view so the tree stays plain text.
-            by_label = by_label.replace("`", "").replace("_", "")
-            lines.append(f"{prefix}    created={created}  by={by_label}")
+            lines.append(
+                f"{prefix}    created={created}  by={_user_label(node.get('created_by'), markdown=False)}"
+            )
         if node.get("job"):
             job = node["job"]
             fn = job.get("function") or {}
@@ -475,6 +452,12 @@ def render_ascii_tree(tree: dict[str, Any]) -> str:
 
     visit(tree, 0, True)
     return "\n".join(lines)
+
+
+def _count_nodes(node: dict[str, Any] | None) -> int:
+    if not node:
+        return 0
+    return 1 + sum(_count_nodes(p) for p in (node.get("parents") or []))
 
 
 def _flatten_lineage(tree: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
@@ -631,12 +614,13 @@ def walk_single_revision(
     revision_id: str,
     users: UserCache,
     max_depth: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], None]:
     """Build a result payload with one lineage tree rooted at ``revision_id``.
 
     Used when the user gave ``--resource-id`` or ``--revision-id`` instead of a
     system. The shape mirrors ``walk_system`` so the markdown renderer and the
-    v3 uploader work unchanged.
+    v3 uploader work unchanged. The second tuple element is ``None`` because
+    there's no system context to feed the v2 uploader.
     """
     rev = client.get_revision(revision_id)
     tree = build_lineage(
@@ -660,7 +644,7 @@ def walk_single_revision(
 
     name = tree.display_name or tree.name or f"resource {tree.resource_id or revision_id}"
 
-    return {
+    payload = {
         "system": None,
         "baseline_snapshot": None,
         "configuration": None,
@@ -674,14 +658,23 @@ def walk_single_revision(
             "model_id": tree.resource_id,
             "model_name": name,
             "tracked_file": None,
-            "lineage": node_to_dict(tree),
-            "_tree_obj": tree,
+            "lineage": asdict(tree),
         }],
     }
+    return payload, None
 
 
-def walk_system(client: Client, system_id: str, users: UserCache, max_depth: int) -> dict[str, Any]:
-    """Walk one system's baseline configuration -> models -> lineage trees."""
+def walk_system(
+    client: Client,
+    system_id: str,
+    users: UserCache,
+    max_depth: int,
+) -> tuple[dict[str, Any], WalkContext]:
+    """Walk one system's baseline configuration -> models -> lineage trees.
+
+    Returns the JSON-serializable payload plus a ``WalkContext`` carrying the
+    SDK objects the v2 uploader needs.
+    """
     system = client.get_system(system_id)
     if not system.baseline_tagged_snapshot_id:
         raise RuntimeError(f"System {system_id} has no baseline snapshot")
@@ -727,9 +720,8 @@ def walk_system(client: Client, system_id: str, users: UserCache, max_depth: int
             cache={},
             users=users,
         )
-        # Decorate the root with the model identity (the revision's own resource
-        # type comes from `file.resource_type`; force it here so the root is
-        # unambiguously the Model, not just a revision).
+        # Force the root's resource_type/id to the Model the tracked-file
+        # points at — without this the root looks like a bare Revision.
         tree.resource_type = "Model"
         tree.resource_id = model.id
         tree.display_name = tree.display_name or getattr(model, "name", None)
@@ -742,11 +734,10 @@ def walk_system(client: Client, system_id: str, users: UserCache, max_depth: int
                 "current_file_revision_id": tf.current_file_revision_id,
                 "pinned_file_revision_id": getattr(tf, "pinned_file_revision_id", None),
             },
-            "lineage": node_to_dict(tree),
-            "_tree_obj": tree,
+            "lineage": asdict(tree),
         })
 
-    return {
+    payload = {
         "system": {
             "id": system.id,
             "name": system.name,
@@ -765,11 +756,13 @@ def walk_system(client: Client, system_id: str, users: UserCache, max_depth: int
             "name": cfg.name,
         },
         "models": models,
-        # Private handles for the v2 system uploader; popped before JSON write.
-        "_cfg": cfg,
-        "_tracked_files": tracked,
-        "_existing_config_names": [c.name for c in (system.configurations or [])],
     }
+    ctx = WalkContext(
+        base_cfg=cfg,
+        tracked_files=tracked,
+        existing_config_names=[c.name for c in (system.configurations or [])],
+    )
+    return payload, ctx
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +864,7 @@ def upload_lineage_v3(
 # Upload (v2 system configuration)
 # ---------------------------------------------------------------------------
 
-def _next_config_name(
+def _next_system_config_name(
     base_cfg_name: str,
     description: str,
     *,
@@ -930,7 +923,7 @@ def add_lineage_to_system_v2(
             file_id=fid,
         ))
 
-    config_name = _next_config_name(
+    config_name = _next_system_config_name(
         base_cfg.name,
         "digital-thread-lineage",
         existing_names=existing_config_names,
@@ -1001,7 +994,7 @@ def main() -> int:
     users = UserCache(client)
 
     if args.system_id:
-        result = walk_system(client, args.system_id, users, max_depth=args.depth)
+        result, ctx = walk_system(client, args.system_id, users, max_depth=args.depth)
     else:
         rev_id = args.revision_id
         if rev_id is None:
@@ -1009,7 +1002,7 @@ def main() -> int:
             resource = v3_lookup.get_resource(resource_id=args.resource_id)
             rev_id = resource.file_revision_id
             print(f"Resolved resource {args.resource_id} -> revision {rev_id}")
-        result = walk_single_revision(client, rev_id, users, max_depth=args.depth)
+        result, ctx = walk_single_revision(client, rev_id, users, max_depth=args.depth)
 
     if not args.no_tree:
         sys_meta = result.get("system")
@@ -1026,16 +1019,8 @@ def main() -> int:
         print()
         for m in result["models"]:
             print(f"\n=== {m.get('model_name')}  ({m.get('model_id')}) ===")
-            tree = m.pop("_tree_obj", None)
-            if tree is not None:
-                print_tree(tree)
-
-    # Strip the in-memory tree objects before serialising.
-    for m in result["models"]:
-        m.pop("_tree_obj", None)
-    base_cfg = result.pop("_cfg", None)
-    tracked_files = result.pop("_tracked_files", None)
-    existing_config_names = result.pop("_existing_config_names", [])
+            if m.get("lineage"):
+                print(render_ascii_tree(m["lineage"]))
 
     out_path = Path(args.out)
     out_path.write_text(json.dumps(result, indent=2, default=str))
@@ -1045,7 +1030,7 @@ def main() -> int:
     md_path = out_path.with_suffix(".md")
     md_path.write_text(render_markdown(result, ui_base=ui_base))
     print(f"Wrote {md_path}  (ASCII trees + per-model tables, links rooted at {ui_base})")
-    print(f"Resolved {len(users._cache)} unique users")
+    print(f"Resolved {len(users)} unique users")
 
     if args.upload:
         print("\nUploading via v3: lineage.md as Model, lineage.json as child Artifact...")
@@ -1076,26 +1061,20 @@ def main() -> int:
         print(f"  Relationship: {rel['type_name']} (inverse: {rel['type_name_inverse']})")
         print(f"             id={rel['id']}  type_id={rel['type_id']}")
 
-        if args.system_id and base_cfg is not None and tracked_files is not None:
+        if ctx is not None:
             print("\nAlso adding both files to a new v2 system configuration...")
             v2_result = add_lineage_to_system_v2(
                 client,
                 system_id=result["system"]["id"],
-                base_cfg=base_cfg,
-                tracked_files=tracked_files,
-                existing_config_names=existing_config_names,
+                base_cfg=ctx.base_cfg,
+                tracked_files=ctx.tracked_files,
+                existing_config_names=ctx.existing_config_names,
                 new_file_ids=[md_r["file_id"], js_r["file_id"]],
             )
             print(f"  Configuration: {v2_result['configuration_name']}  ({v2_result['configuration_id']})")
             print(f"  Tracked files: {v2_result['tracked_count']} (added {len(v2_result['added_file_ids'])} new)")
             print(f"  System view:   {ui_base}/systems/{result['system']['id']}")
     return 0
-
-
-def _count_nodes(node: dict[str, Any] | None) -> int:
-    if not node:
-        return 0
-    return 1 + sum(_count_nodes(p) for p in (node.get("parents") or []))
 
 
 if __name__ == "__main__":
