@@ -47,20 +47,34 @@ extract = client.add_job(
 TERMINAL = {JobStatusName.COMPLETED, JobStatusName.FAILED, JobStatusName.CANCELED}
 while True:
     extract = client.get_job(str(extract.id))
+    print(f"Extract job status: {extract.status.name} — {extract.status.message}")
     if extract.status.name in TERMINAL:
+        if extract.status.name == JobStatusName.FAILED:
+            print("STATUS HISTORY:")
+            for s in extract.status_history:
+                print(f"  {s.name} — {s.message}")
         break
     time.sleep(10)
 
 # 3. Grab element_id from blocks.json or requirements.json artifact
 #    (find artifact → read contents → pick id field)
 model = client.get_model(str(model.id))
-blocks_artifact = next(
-    a for a in model.artifacts
-    if a.file.revisions[0].name.endswith("blocks.json")
+print(f"Artifacts found: {len(model.artifacts)}")
+for a in model.artifacts:
+    print(f"  - {a.file.revisions[0].name}")
+req_artifact = next(
+    (a for a in model.artifacts
+     if a.file.revisions[0].name.endswith("requirements.json")),
+    None,
 )
-blocks = client.read_contents(blocks_artifact.file_revision.token)
-# inspect blocks → copy desired element's "id"
-element_id = "_2022x_2_abc123..."  # replace with real ID
+if req_artifact is None:
+    print("No requirements.json artifact found. Check extract job output.")
+    exit(1)
+requirements = req_artifact.read_json()
+print(f"requirements.json has {len(requirements)} entries")
+# Pick the first requirement's ID
+element_id = requirements[0]["id"]
+print(f"Using element_id: {element_id}")
 
 # 4. Run update_tags
 job = client.add_job(
@@ -73,9 +87,9 @@ job = client.add_job(
         "updates": [
             {
                 "element_id": element_id,
+                "replace_existing": True,  # False to append instead of overwrite
                 "tags": {  # flat dict: tag_name → value
-                    "hyperlinkText": "FIA 2025",
-                    "owner": "rbillings",
+                    "Text": "hello",
                 },
             },
             # more elements as needed
