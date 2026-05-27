@@ -375,6 +375,7 @@ dev = [
     { name = "nbformat" },
     { name = "nbqa" },
     { name = "pre-commit" },
+    { name = "python-dotenv" },
     { name = "ruff" },
 ]
 
@@ -383,12 +384,13 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "ipykernel", specifier = ">=6.29" },
-    { name = "istari-digital-client" },
+    { name = "istari-digital-client", specifier = "==10.10.0" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "nbclient", specifier = ">=0.10.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "nbqa", specifier = ">=1.8" },
     { name = "pre-commit", specifier = ">=3.8.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "ruff", specifier = ">=0.5.0" },
 ]
 
