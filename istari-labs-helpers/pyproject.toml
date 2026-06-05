@@ -25,6 +25,9 @@ experiment = [
     "ipykernel",
 ]
 
+[project.scripts]
+uat = "istari_labs_helpers._uat_entry:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
