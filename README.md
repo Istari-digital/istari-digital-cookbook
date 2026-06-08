@@ -30,6 +30,8 @@ The notebooks cover the same platform concepts whether they use **`istari_labs_h
 | [`samples/chaining_jobs.ipynb`](samples/chaining_jobs.ipynb) | `istari_labs_helpers` | Connect, register a spreadsheet as a model, run two chained extraction jobs, trace lineage. |
 | [`samples/chaining_jobs_no_helper.ipynb`](samples/chaining_jobs_no_helper.ipynb) | Official client (`istari_digital_client`) | Same chained-job story as above, using the v2 `Client` API only. |
 | [`samples/misc_recipes.ipynb`](samples/misc_recipes.ipynb) | `istari_labs_helpers` | Short, independent snippets (agents, resources, archiving, and similar). |
+| [`samples/resources/using-resources.ipynb`](samples/resources/using-resources.ipynb) | Official client (`V3Client` + v2 `Client`) | Files (resources): upload, search, versions, comments, sharing, and cleanup. |
+| [`samples/resources/connect-resources-twc.ipynb`](samples/resources/connect-resources-twc.ipynb) | Official client (`istari_digital_client`) | Teamwork Cloud: upload pointer file (connected `mdel://` link), TWC auth, `@istari:twc_extract`. |
 | [`samples/resources/resources_misc_labs_helpers.ipynb`](samples/resources/resources_misc_labs_helpers.ipynb) | `istari_labs_helpers` | Model registration, text uploads, search, and bulk patterns for platform resources. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Official client (`istari_digital`) | Extract metadata from a CATIA `.CATPart`. |
 
