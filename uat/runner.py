@@ -26,7 +26,15 @@ import importlib
 import sys
 from datetime import datetime
 
-from uat.common import Status, TestContext, build_context, setup_logging, write_results
+from uat.common import (
+    Status,
+    TestContext,
+    build_context,
+    recheck_baseline,
+    setup_logging,
+    take_baseline,
+    write_results,
+)
 
 # ---------------------------------------------------------------------------
 # Suite registry — ordered by dependency
@@ -113,6 +121,12 @@ def main() -> None:
         help="Skip archiving resources created during the run",
     )
     parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="Take a platform entity-count baseline before the run "
+             "(adds per-step platform_state to results; use on a dedicated perf env)",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="Print available suite names and exit",
@@ -135,6 +149,9 @@ def main() -> None:
         log.error(str(exc))
         sys.exit(1)
 
+    if args.baseline:
+        take_baseline(ctx)
+
     suites = _resolve_suites(args.suite)
     log.info(f"Running {len(suites)} suite(s): {', '.join(s.split('.')[-1] for s in suites)}")
 
@@ -143,11 +160,23 @@ def main() -> None:
 
     ctx.cleanup()
 
+    if args.baseline:  # re-measure footprint; records ctx.drift + logs footprint growth
+        recheck_baseline(ctx)
+
     results_path = write_results(ctx, [s.split(".")[-1] for s in suites])
 
     summary = ctx.summary()
     log.info(f"\n{'═' * 60}")
     log.info(f"  PASS={summary[Status.PASS]}  FAIL={summary[Status.FAIL]}  SKIP={summary[Status.SKIP]}")
+    failures = [r for r in ctx._results if r.status == Status.FAIL]
+    if failures:
+        log.info(f"  Failures ({len(failures)}):")
+        for r in failures:
+            log.info(f"    [{r.suite}] {r.description} — {r.error.splitlines()[0] if r.error else ''}")
+    if ctx.drift:
+        log.info(f"  Baseline drift ({len(ctx.drift)}):")
+        for fieldname, expected, actual in ctx.drift:
+            log.info(f"    {fieldname}: expected {expected}, found {actual} (Δ{actual - expected:+d})")
     log.info(f"  Results: {results_path}")
     log.info(f"{'═' * 60}")
 

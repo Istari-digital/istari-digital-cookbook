@@ -134,6 +134,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -180,13 +182,6 @@ cython_debug/
 
 # JetBrains IDE settings
 .idea/
-
-# Env files with credentials
-.env.dev
-.env.stage
-.env.demo
-.env.perf
-.env.prod
 
 # UAT results (logs + JSON per run; .gitkeep keeps the dir tracked)
 uat/results/

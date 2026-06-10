@@ -56,6 +56,23 @@ uat/
 
 ---
 
+## Baselining (`--baseline`)
+
+`--baseline` measures the platform's **total entity footprint** before and after the
+run (attaching per-step `platform_state` and writing `baseline` + `final_counts` to
+the results JSON).
+
+Counts use `archive_status="all"` on purpose: **archive is a soft-delete** — archived
+rows still exist and are still walked by the SpiceDB permission scan on every list call
+(CPD-598/601), so they are what drives latency. Cleanup only archives, so it never
+shrinks the footprint: each run permanently grows the env and repeated runs degrade it
+(on `perf`, a ~23s run became 6 min after a few rounds). Because created resources
+persist, the post-run check expects `final == baseline + created` and warns on any drift
+(another user's activity, an untracked resource, or a hard delete). Run on a disposable
+tenant — never trust baseline numbers from a shared env.
+
+---
+
 ## Known platform issues (not code bugs)
 
 | Endpoint | Error | Tracking |
