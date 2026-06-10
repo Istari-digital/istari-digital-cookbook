@@ -16,7 +16,7 @@ def run(ctx: TestContext) -> None:
             assert isinstance(remote_id, str)
             return ctx.v3.get_sending_remote(remote_id=remote_id)
     else:
-        ctx.skip("get_sending_remote", "no sending remotes configured on platform")
+        ctx.skip("get_sending_remote", "list_sending_remotes failed or returned no remotes")
 
     @ctx.step("list_receiving_remotes — enumerate inbound remote connections")
     def receiving():
@@ -29,4 +29,4 @@ def run(ctx: TestContext) -> None:
             assert isinstance(remote_id, str)
             return ctx.v3.get_receiving_remote(remote_id=remote_id)
     else:
-        ctx.skip("get_receiving_remote", "no receiving remotes configured on platform")
+        ctx.skip("get_receiving_remote", "list_receiving_remotes failed or returned no remotes")

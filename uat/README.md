@@ -4,6 +4,14 @@ End-to-end test suite covering the publicly documented SDK surface at
 [docs.istaridigital.com/developers/SDK](https://docs.istaridigital.com/developers/SDK).
 Each suite also serves as working example code for that API area.
 
+**Scope rule: only documented endpoints get suites.** A suite exists iff its methods
+appear on the public docs site — v2 suites map to the method sections of the single
+[v2 client reference page](https://docs.istaridigital.com/developers/SDK/api_reference/client/),
+v3 suites to the sections of the
+[V3Client reference page](https://docs.istaridigital.com/developers/SDK/v3/v3-client/).
+SDK methods that exist but are undocumented are out of scope until the docs ship.
+Re-check the docs when adding suites — they move (docs inventory last verified 2026-06-10).
+
 ## Running
 
 ```bash
@@ -46,13 +54,15 @@ uat/
 | `v2_tools` | Agents, Modules & Tools |
 | `v2_users` | Admin |
 
-### v3 suites (docs page: V3 Client Quick Start)
+### v3 suites (docs page: [V3Client reference](https://docs.istaridigital.com/developers/SDK/v3/v3-client/))
 
 | Suite | Methods covered |
 |---|---|
 | `v3_resources` | `create_resource`, `get_resource` |
-| `v3_revisions` | `create_resource_revision`, `list_resource_revisions`, `get_resource_revision` |
-| `v3_relationships` | `list_revision_relationship_types`, `create_revision_relationship` |
+| `v3_revisions` | `create_resource_revision`, `list_resource_revisions`, `get_resource_revision`, `get_content` |
+| `v3_relationships` | `list_revision_relationship_types`, `create_revision_relationship`, `list_revision_relationships` |
+| `v3_comments` | `create_comment`, `get_comment`, `list_comments`, `update_comment`, `archive_comment`, `restore_comment` |
+| `v3_remotes` | `list_sending_remotes`, `get_sending_remote`, `list_receiving_remotes`, `get_receiving_remote` |
 
 ---
 
@@ -73,6 +83,52 @@ tenant — never trust baseline numbers from a shared env.
 
 ---
 
+## Perf measurement (`uat.perf`)
+
+Separate from the correctness suites: run a subset of endpoints N times per env and
+record per-call latency as a time series, for dashboards.
+
+```bash
+python -m uat.perf --list                                   # available operations
+python -m uat.perf --env perf --ops upload_model --repeat 10
+python -m uat.perf --env dev,stage --repeat 20              # several envs, one run_id
+```
+
+The package separates concerns: `operations.py` (*what* to measure — the endpoint
+catalog), `measure.py` (*how* — the timed repeat loop), `store.py` (persistence — the
+dashboard contract), `report.py` (console summary), `runner.py` (CLI + multi-env loop).
+
+Each run appends to two per-env JSONL streams under `results/perf/` (gitignored):
+
+| File | One line per | Key fields |
+|---|---|---|
+| `{env}.samples.jsonl` | measured call | `run_id, env, operation, iteration, started_at, duration_s, status` |
+| `{env}.baseline.jsonl` | run | `run_id, env, taken_at, <entity counts>` |
+
+`started_at` (ISO-8601 UTC) is the dashboard x-axis; `duration_s` the latency series;
+the baseline stream is the footprint to plot alongside it. One env = one file; envs
+share the schema, so comparing envs is a filter. A failed call is recorded as a
+`status="error"` sample (with the message) rather than aborting the run.
+
+### Visualization (`visualize.py`)
+
+Renders one self-contained HTML report (plotly via CDN): UAT step latency (failures
+as red ✕), baseline counts (`-1` = uncountable, dips below the axis), perf latency
+time series with error overlay, footprint over runs. Needs the `experiment` extras
+(`uv sync --extra experiment`).
+
+```bash
+python -m uat.visualize                                # latest run, env perf
+python -m uat.visualize --run 20260610_104751 --env dev --open
+```
+
+Plain `.py`, not a notebook: Helix has no LSP inside `.ipynb` cells — it opens
+notebooks as JSON ([helix#6927](https://github.com/helix-editor/helix/pull/6927))
+and lacks LSP notebook sync, so even ruff's notebook support never engages
+([ruff#22809](https://github.com/astral-sh/ruff/issues/22809)).
+
+---
+
 ## Known platform issues (not code bugs)
 
 | Endpoint | Error | Tracking |
@@ -83,24 +139,20 @@ tenant — never trust baseline numbers from a shared env.
 
 ---
 
-## Not yet covered — undocumented / experimental
+## Coverage gaps — documented but not yet suited
 
-These exist in the SDK but are not yet in public documentation. Files are
-present but not wired into the runner. Add to `SUITES` in `runner.py` once documented.
+Verified against the live docs 2026-06-10. All previously-undocumented suites
+(`v3_comments`, `v3_remotes`) are now on the
+[V3Client reference page](https://docs.istaridigital.com/developers/SDK/v3/v3-client/)
+and are registered in the runner. `v2_change_requests` was deleted: change requests
+are absent from both the docs and the SDK `Client`.
 
-### `v2_change_requests.py`
-`ChangeRequest*` model classes exist in the package but `Client` has no
-corresponding methods in SDK 10.11.1. Appears to be in-progress, related to
-the experimental branching UI.
+Still documented but uncovered:
 
-### `v3_comments.py`
-`create_comment`, `list_comments`, `update_comment`, `archive_comment`,
-`restore_comment` — present in `V3Client` but not on the public docs site.
-
-### `v3_remotes.py`
-`list_sending_remotes`, `list_receiving_remotes`, etc. — present in `V3Client`
-but not documented publicly.
-
-### v3 archive/restore
-`archive_resource`, `restore_resource` — present in `V3Client` but not
-covered on the v3 quick-start docs page.
+- **v2 Infosec levels** — its own section on the
+  [v2 client page](https://docs.istaridigital.com/developers/SDK/api_reference/client/); no suite yet.
+- **v3 workflow logs** — own page at
+  [v3/workflow-logs](https://docs.istaridigital.com/developers/SDK/v3/workflow-logs/); no suite yet.
+- **v3 `archive_resource`/`restore_resource`** — documented; exercised only by cleanup, not as steps.
+- **v3 remote create/update** (`create_sending_remote` etc.) — documented; the suite stays
+  read-only because creating remote connections mutates cross-tenant config.

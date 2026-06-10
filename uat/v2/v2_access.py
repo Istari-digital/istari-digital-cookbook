@@ -13,8 +13,6 @@ def run(ctx: TestContext) -> None:
     def access_page():
         return ctx.client.list_model_access(model.id)
 
-    me = ctx.shared.get("current_user")
-
     @ctx.step("list_model_access — verify access list returns successfully")
     def verified():
         assert access_page is not None, "depends on list_model_access"

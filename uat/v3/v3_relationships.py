@@ -55,11 +55,8 @@ def run(ctx: TestContext) -> None:
             )
         )
 
-    # list_revision_relationships returns 500 server-side — known issue CPD-598/601
-    try:
-        @ctx.step("list_revision_relationships — list relationships for a revision [known 500 — CPD-598]")
-        def rels():
-            assert isinstance(rev_a, str)
-            return ctx.v3.list_revision_relationships(revision_id=rev_a)
-    except Exception:
-        ctx.skip("list_revision_relationships", "server 500 — CPD-598/601 pending fix")
+    # Returns 500 server-side (CPD-598/601); ctx.step records the FAIL.
+    @ctx.step("list_revision_relationships — list relationships for a revision [known 500 — CPD-598]")
+    def rels():
+        assert isinstance(rev_a, str)
+        return ctx.v3.list_revision_relationships(revision_id=rev_a)

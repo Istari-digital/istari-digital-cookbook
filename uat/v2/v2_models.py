@@ -19,10 +19,9 @@ def run(ctx: TestContext) -> None:
     @ctx.step("get_model — fetch a model by id")
     def fetched():
         assert model, "depends on upload_model"
-        return ctx.platform.get_model(model.id)
-
-    assert fetched is None or fetched.id == (model.id if model else None), \
-        "get_model returned wrong id"
+        got = ctx.platform.get_model(model.id)
+        assert got.id == model.id, "get_model returned wrong id"
+        return got
 
     @ctx.step("update_model — add a new revision to an existing model")
     def updated():

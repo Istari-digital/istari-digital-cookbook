@@ -44,7 +44,7 @@ def run(ctx: TestContext) -> None:
         )
 
     if xlsx_model:
-        ctx.register("job_model", xlsx_model)
+        ctx.register("model", xlsx_model, share_key="job_model")
 
     @ctx.step("add_job — submit @istari:extract / open_spreadsheet against the xlsx model")
     def job():

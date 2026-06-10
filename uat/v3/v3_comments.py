@@ -1,5 +1,6 @@
 """v3 Comments — create, reply, list, get, update, archive, restore."""
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -8,7 +9,6 @@ from uat.common import TestContext
 
 def _comment_file(text: str) -> Path:
     fd, path = tempfile.mkstemp(suffix=".txt")
-    import os
     os.write(fd, text.encode())
     os.close(fd)
     return Path(path)

@@ -23,7 +23,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 import argparse
 import importlib
-import sys
 from datetime import datetime
 
 from uat.common import (
@@ -55,10 +54,12 @@ SUITES: list[str] = [
     "v2.v2_control_tags",  # needs "model"
     "v2.v2_agents",
     "v2.v2_tools",
-    # v3 — documented at docs.istaridigital.com/developers/SDK/v3/quick-start
+    # v3 — documented at docs.istaridigital.com/developers/SDK/v3/v3-client/
     "v3.v3_resources",     # → stores "v3_resource"
     "v3.v3_revisions",     # needs "v3_resource"
     "v3.v3_relationships", # needs "v3_resource" (list xfail — CPD-598)
+    "v3.v3_comments",      # needs "v3_resource"
+    "v3.v3_remotes",
 ]
 
 # Short names users can pass on CLI (strip the package prefix)
@@ -104,33 +105,16 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--env",
-        choices=["dev", "stage", "demo", "perf", "prod"],
-        default="demo",
-        help="Target environment (default: demo)",
-    )
-    parser.add_argument(
-        "--suite",
-        metavar="SUITE[,SUITE...]",
-        help="Comma-separated suites to run; default runs all",
-    )
-    parser.add_argument(
-        "--no-cleanup",
-        action="store_true",
-        help="Skip archiving resources created during the run",
-    )
-    parser.add_argument(
-        "--baseline",
-        action="store_true",
-        help="Take a platform entity-count baseline before the run "
-             "(adds per-step platform_state to results; use on a dedicated perf env)",
-    )
-    parser.add_argument(
-        "--list",
-        action="store_true",
-        help="Print available suite names and exit",
-    )
+    parser.add_argument("--env", choices=["dev", "stage", "demo", "perf", "prod"], default="demo",
+                        help="target environment (default: demo)")
+    parser.add_argument("--suite", metavar="SUITE[,SUITE...]",
+                        help="comma-separated suites to run; default all")
+    parser.add_argument("--no-cleanup", action="store_true",
+                        help="skip archiving resources created during the run")
+    parser.add_argument("--baseline", action="store_true",
+                        help="take an entity-count baseline before the run "
+                             "(adds per-step platform_state; use on a dedicated perf env)")
+    parser.add_argument("--list", action="store_true", help="print available suite names and exit")
     args = parser.parse_args()
 
     if args.list:
