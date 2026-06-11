@@ -36,35 +36,35 @@ from uat.common import (
 )
 
 # ---------------------------------------------------------------------------
-# Suite registry — ordered by dependency
+# Suite registry — "module.function" in uat/v2.py and uat/v3.py; section order
+# mirrors the docs pages (api_reference/client and v3/v3-client respectively)
+# and still satisfies cross-suite dependencies.
 # ---------------------------------------------------------------------------
 
 SUITES: list[str] = [
-    # v2 — read-only / independent first
-    "v2.v2_users",
-    "v2.v2_files",
-    "v2.v2_models",        # → stores "model"
-    "v2.v2_artifacts",     # needs "model"
-    "v2.v2_revisions",     # needs "model"
-    "v2.v2_jobs",          # needs "model"
-    "v2.v2_systems",       # needs "model" → stores "system", "configuration"
-    "v2.v2_documents",     # needs "configuration"
-    "v2.v2_snapshots",     # needs "system", "configuration"
-    "v2.v2_access",        # needs "model"
-    "v2.v2_control_tags",  # needs "model"
-    "v2.v2_agents",
-    "v2.v2_tools",
-    # v3 — documented at docs.istaridigital.com/developers/SDK/v3/v3-client/
-    "v3.v3_resources",     # → stores "v3_resource"
-    "v3.v3_revisions",     # needs "v3_resource"
-    "v3.v3_relationships", # needs "v3_resource" (list xfail — CPD-598)
-    "v3.v3_comments",      # needs "v3_resource"
-    "v3.v3_remotes",
+    "v2.files",
+    "v2.models",         # → stores "model"
+    "v2.artifacts",      # needs "model"
+    "v2.revisions",      # needs "model"
+    "v2.jobs",
+    "v2.systems",        # needs "model" → stores "system", "configuration"
+    "v2.snapshots",      # needs "system", "configuration"
+    "v2.access",         # needs "model"
+    "v2.control_tags",   # needs "model"
+    "v2.documents",      # needs "configuration"
+    "v2.agents",
+    "v2.tools",
+    "v2.users",
+    "v3.resources",      # → stores "v3_resource"
+    "v3.revisions",      # needs "v3_resource"
+    "v3.comments",       # needs "v3_resource"
+    "v3.relationships",  # needs "v3_resource" (list xfail — CPD-598)
+    "v3.remotes",
 ]
 
-# Short names users can pass on CLI (strip the package prefix)
-_SHORT_TO_FULL = {s.split(".")[-1]: s for s in SUITES}
-_SHORT_TO_FULL.update({s: s for s in SUITES})  # also accept full names
+# CLI names: v2.files → v2_files (unchanged from the one-file-per-suite layout)
+_SHORT_TO_FULL = {s.replace(".", "_"): s for s in SUITES}
+_SHORT_TO_FULL.update({s: s for s in SUITES})  # also accept dotted names
 
 
 def _resolve_suites(spec: str | None) -> list[str]:
@@ -82,15 +82,16 @@ def _resolve_suites(spec: str | None) -> list[str]:
     return resolved
 
 
-def _run_suite(suite_module_path: str, ctx: TestContext) -> None:
-    short = suite_module_path.split(".")[-1]
+def _run_suite(spec: str, ctx: TestContext) -> None:
+    modname, fnname = spec.split(".")
+    short = f"{modname}_{fnname}"
     ctx._current_suite = short
     ctx._log.info(f"\n{'─' * 60}")
     ctx._log.info(f"  Suite: {short}")
     ctx._log.info(f"{'─' * 60}")
     try:
-        mod = importlib.import_module(f"uat.{suite_module_path}")
-        mod.run(ctx)
+        fn = getattr(importlib.import_module(f"uat.{modname}"), fnname)
+        fn(ctx)
     except Exception as exc:
         ctx._log.error(f"Suite {short} crashed: {exc}")
 
@@ -120,7 +121,7 @@ def main() -> None:
     if args.list:
         print("Available suites (pass short name to --suite):")
         for s in SUITES:
-            print(f"  {s.split('.')[-1]:<28}  ({s})")
+            print(f"  {s.replace('.', '_'):<28}  (uat/{s.split('.')[0]}.py)")
         return
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -137,7 +138,7 @@ def main() -> None:
         take_baseline(ctx)
 
     suites = _resolve_suites(args.suite)
-    log.info(f"Running {len(suites)} suite(s): {', '.join(s.split('.')[-1] for s in suites)}")
+    log.info(f"Running {len(suites)} suite(s): {', '.join(s.replace('.', '_') for s in suites)}")
 
     for suite in suites:
         _run_suite(suite, ctx)
@@ -147,7 +148,7 @@ def main() -> None:
     if args.baseline:  # re-measure footprint; records ctx.drift + logs footprint growth
         recheck_baseline(ctx)
 
-    results_path = write_results(ctx, [s.split(".")[-1] for s in suites])
+    results_path = write_results(ctx, [s.replace(".", "_") for s in suites])
 
     summary = ctx.summary()
     log.info(f"\n{'═' * 60}")

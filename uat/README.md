@@ -32,9 +32,11 @@ uat/
 ├── common.py       — TestContext, @ctx.step decorator, logging, results
 ├── data/           — upload fixtures (dummy.txt)
 ├── results/        — rotating log (uat.log) + per-run JSON (gitignored)
-├── v2/             — one file per public v2 docs page
-└── v3/             — documented v3 endpoints (quick-start page)
+├── v2.py           — all v2 suites, sections in the docs page's order
+└── v3.py           — all v3 suites, sections in the v3-client page's order
 ```
+
+Suite names on the CLI are `{file}_{function}` (e.g. `--suite v2_models,v3_comments`).
 
 ### v2 suites (docs pages)
 

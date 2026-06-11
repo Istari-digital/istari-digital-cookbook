@@ -6,8 +6,9 @@ the working tree (nothing pushed).
 
 ## What this branch adds
 
-1. **UAT correctness suites** (`uat/v2/`, `uat/v3/`) — one file per documented SDK
-   docs page; each suite is also working example code. Driven by `uat/runner.py`
+1. **UAT correctness suites** (`uat/v2.py`, `uat/v3.py`) — one file per SDK version,
+   one function per documented docs topic, sections in the docs pages' order; each
+   suite is also working example code. Driven by `uat/runner.py`
    (`python -m uat.runner` / `uat` script).
 
    **Scope rule: only documented endpoints get suites.** Source of truth is the live
@@ -52,7 +53,8 @@ uat/
   common.py        TestContext, @ctx.step, baseline (take_baseline/recheck_baseline),
                    cleanup (_archive_one dispatch), write_results, build_context
   runner.py        UAT CLI: suite registry, --baseline, end summary (failures + drift)
-  v2/*.py v3/*.py  correctness suites (intentionally repetitive = example code)
+  v2.py v3.py      correctness suites, one function per docs topic
+                   (intentionally repetitive = example code)
   perf/
     operations.py  WHAT to measure — Operation registry (+ optional setup fixtures)
     measure.py     HOW — timed repeat loop → list[Sample]
