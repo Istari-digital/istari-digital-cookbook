@@ -33,6 +33,7 @@ The notebooks cover the same platform concepts whether they use **`istari_labs_h
 | [`samples/resources/using-resources.ipynb`](samples/resources/using-resources.ipynb) | Official client (`V3Client` + v2 `Client`) | Files (resources): upload, search, versions, comments, sharing, and cleanup. |
 | [`samples/resources/connect-resources-twc.ipynb`](samples/resources/connect-resources-twc.ipynb) | Official client (`istari_digital_client`) | Teamwork Cloud: upload pointer file (connected `mdel://` link), TWC auth, `@istari:twc_extract`. |
 | [`samples/org-admin/org-admin-tasks.ipynb`](samples/org-admin/org-admin-tasks.ipynb) | Official client (`istari_digital_client`) | Org admin: find user by email, list tools, grant executor access to all tools. |
+| [`samples/workflow-logs/workflow_log_demo.ipynb`](samples/workflow-logs/workflow_log_demo.ipynb) | Official client (`istari_digital_client` + `V3Client`) | External workflow logs: verification battery, design loop, tradespace sweep. |
 | [`samples/resources/resources_misc_labs_helpers.ipynb`](samples/resources/resources_misc_labs_helpers.ipynb) | `istari_labs_helpers` | Model registration, text uploads, search, and bulk patterns for platform resources. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Official client (`istari_digital`) | Extract metadata from a CATIA `.CATPart`. |
 

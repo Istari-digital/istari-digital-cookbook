@@ -82,6 +82,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+samples/workflow-logs/_notebook_run/
 
 # IPython
 profile_default/
