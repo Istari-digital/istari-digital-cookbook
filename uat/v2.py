@@ -2,6 +2,16 @@
 order documented at docs.istaridigital.com/developers/SDK/api_reference/client/.
 """
 
+from istari_digital_client.v2.models.create_document_request import CreateDocumentRequest
+from istari_digital_client.v2.models.new_control_tag import NewControlTag
+from istari_digital_client.v2.models.new_snapshot import NewSnapshot
+from istari_digital_client.v2.models.new_system import NewSystem
+from istari_digital_client.v2.models.new_system_configuration import NewSystemConfiguration
+from istari_digital_client.v2.models.new_tracked_file import NewTrackedFile
+from istari_digital_client.v2.models.tracked_file_specifier_type import TrackedFileSpecifierType
+from istari_digital_client.v2.models.update_document_request import UpdateDocumentRequest
+from istari_digital_client.v2.models.update_system import UpdateSystem
+
 from uat.common import TestContext
 
 
@@ -134,13 +144,9 @@ def artifacts(ctx: TestContext) -> None:
 def revisions(ctx: TestContext) -> None:
     """Fetch revisions, copy and transfer between resources."""
     model = ctx.shared.get("model")
-    if not model:
-        ctx.skip("get_revision", "no model in ctx — run v2_models first")
-        return
-
-    rev = model.latest_revision
+    rev = model.latest_revision if model else None
     if not rev:
-        ctx.skip("get_revision", "model has no revisions")
+        ctx.skip("get_revision", "no model with revisions in ctx — run v2_models first")
         return
     rev_id = rev.id
 
@@ -162,12 +168,10 @@ def revisions(ctx: TestContext) -> None:
     @ctx.step("read_contents — download raw bytes for a revision's content token")
     def content():
         assert revision, "depends on get_revision"
-        token = revision.content_token
-        assert token, "revision has no content_token"
-        return ctx.client.read_contents(token=token)
-
-    if content:
-        assert len(content) > 0, "downloaded 0 bytes"
+        assert revision.content_token, "revision has no content_token"
+        data = ctx.client.read_contents(token=revision.content_token)
+        assert len(data) > 0, "downloaded 0 bytes"
+        return data
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
@@ -175,8 +179,8 @@ def revisions(ctx: TestContext) -> None:
 def jobs(ctx: TestContext) -> None:
     """Submit, get, list, archive/restore.
 
-    Uses sample.xlsx with the @istari:extract / open_spreadsheet function, which
-    is a basic Istari module available on all environments.
+    Uses sample.xlsx with the @istari:extract / open_spreadsheet function, a
+    basic Istari module expected on all environments.
     """
 
     @ctx.step("list_functions — discover available job functions")
@@ -187,24 +191,18 @@ def jobs(ctx: TestContext) -> None:
     def jobs_page():
         return ctx.client.list_jobs(size=10)
 
-    # Search specifically for @istari:extract — basic Istari module that should
-    # exist on all environments. Use name filter to avoid paginating through all.
-    has_extract = False
+    # name filter avoids paginating every function just to find @istari:extract
     extract_page = ctx.client.list_functions(name="@istari:extract", size=1)
-    if extract_page and getattr(extract_page, "items", None):
-        has_extract = len(extract_page.items) > 0
-
-    if not has_extract:
+    if not (extract_page and getattr(extract_page, "items", None)):
         ctx._log.warning(
-            "⚠️  WARNING: @istari:extract / open_spreadsheet not found on this environment. "
-            "Job endpoint tests are SKIPPED. This must be resolved before jobs can be validated."
+            "⚠️  @istari:extract / open_spreadsheet not found on this environment — "
+            "job endpoint tests are SKIPPED until the module is installed."
         )
         for step in ("upload_model (xlsx)", "add_job", "get_job",
                      "list_model_jobs", "archive_job", "restore_job"):
             ctx.skip(step, "@istari:extract not available — job tests cannot run")
         return
 
-    # Upload the xlsx as a model specifically for job submission
     @ctx.step("upload_model (xlsx) — upload a spreadsheet to run extraction against")
     def xlsx_model():
         return ctx.platform.upload_model(
@@ -262,7 +260,6 @@ def systems(ctx: TestContext) -> None:
 
     @ctx.step("create_system — create a new engineering system")
     def system():
-        from istari_digital_client.v2.models.new_system import NewSystem
         return ctx.client.create_system(
             NewSystem(
                 name=f"UAT v2 System {ctx.run_id}",
@@ -283,16 +280,12 @@ def systems(ctx: TestContext) -> None:
         return ctx.client.list_systems(size=10)
 
     if not model:
-        ctx.skip("create_configuration", "no model in ctx — skipping tracked-file steps")
-        ctx.skip("list_configurations", "no model in ctx")
-        ctx.skip("get_system_baseline", "no model in ctx")
+        for step in ("create_configuration", "list_configurations", "get_system_baseline"):
+            ctx.skip(step, "no model in ctx — run v2_models first")
     else:
         @ctx.step("create_configuration — add a configuration with a tracked model")
         def config():
             assert system, "depends on create_system"
-            from istari_digital_client.v2.models.new_system_configuration import NewSystemConfiguration
-            from istari_digital_client.v2.models.new_tracked_file import NewTrackedFile
-            from istari_digital_client.v2.models.tracked_file_specifier_type import TrackedFileSpecifierType
             return ctx.client.create_configuration(
                 system_id=system.id,
                 new_system_configuration=NewSystemConfiguration(
@@ -322,7 +315,6 @@ def systems(ctx: TestContext) -> None:
     @ctx.step("update_system — rename a system")
     def updated():
         assert system, "depends on create_system"
-        from istari_digital_client.v2.models.update_system import UpdateSystem
         return ctx.client.update_system(
             system.id,
             UpdateSystem(name=f"UAT v2 System {ctx.run_id}", description="Updated by UAT runner"),
@@ -343,17 +335,14 @@ def snapshots(ctx: TestContext) -> None:
     """Create, fetch, compare, list items, snapshot tags."""
     system = ctx.shared.get("system")
     config = ctx.shared.get("configuration")
-
     if not system or not config:
-        ctx.skip("create_snapshot", "no system/configuration in ctx — run v2_systems first")
-        ctx.skip("get_snapshot", "no system in ctx")
-        ctx.skip("list_snapshots", "no system in ctx")
-        ctx.skip("list_snapshot_items", "no system in ctx")
+        for step in ("create_snapshot", "get_snapshot", "list_snapshots",
+                     "list_snapshot_items", "list_snapshot_subsystems"):
+            ctx.skip(step, "no system/configuration in ctx — run v2_systems first")
         return
 
     @ctx.step("create_snapshot — capture a point-in-time snapshot of a configuration")
     def snapshot_response():
-        from istari_digital_client.v2.models.new_snapshot import NewSnapshot
         return ctx.client.create_snapshot(
             configuration_id=config.id,
             new_snapshot=NewSnapshot(),
@@ -393,14 +382,10 @@ def access(ctx: TestContext) -> None:
 
     @ctx.step("list_model_access — list who has access to a model")
     def access_page():
-        return ctx.client.list_model_access(model.id)
-
-    @ctx.step("list_model_access — verify access list returns successfully")
-    def verified():
-        assert access_page is not None, "depends on list_model_access"
-        # list_model_access returns List[AccessRelationship] directly
-        assert isinstance(access_page, list)
-        return access_page
+        page = ctx.client.list_model_access(model.id)
+        # returns List[AccessRelationship] directly, not a paginated wrapper
+        assert isinstance(page, list), f"expected a list, got {type(page).__name__}"
+        return page
 
 
 def control_tags(ctx: TestContext) -> None:
@@ -409,7 +394,6 @@ def control_tags(ctx: TestContext) -> None:
 
     @ctx.step("create_control_tag — create a new control tag")
     def tag():
-        from istari_digital_client.v2.models.new_control_tag import NewControlTag
         return ctx.client.create_control_tag(
             NewControlTag(name=f"uat-tag-{ctx.run_id}", description="UAT control tag")
         )
@@ -427,10 +411,9 @@ def control_tags(ctx: TestContext) -> None:
         return ctx.client.get_control_tag(tag.id)
 
     if not model:
-        ctx.skip("add_model_control_taggings", "no model in ctx — run v2_models first")
-        ctx.skip("get_model_control_tags", "no model in ctx")
-        ctx.skip("get_model_control_tagging_history", "no model in ctx")
-        ctx.skip("remove_model_control_taggings", "no model in ctx")
+        for step in ("add_model_control_taggings", "get_model_control_tags",
+                     "get_model_control_tagging_history", "remove_model_control_taggings"):
+            ctx.skip(step, "no model in ctx — run v2_models first")
         return
 
     @ctx.step("add_model_control_taggings — apply a control tag to a model")
@@ -463,7 +446,6 @@ def documents(ctx: TestContext) -> None:
 
     @ctx.step("create_document — create a rich-text document in a configuration")
     def doc():
-        from istari_digital_client.v2.models.create_document_request import CreateDocumentRequest
         return ctx.client.create_document(
             CreateDocumentRequest(
                 configuration_id=config.id,
@@ -483,7 +465,6 @@ def documents(ctx: TestContext) -> None:
     @ctx.step("update_document — update document content")
     def updated():
         assert doc, "depends on create_document"
-        from istari_digital_client.v2.models.update_document_request import UpdateDocumentRequest
         return ctx.client.update_document(
             doc.id,
             UpdateDocumentRequest(
@@ -515,11 +496,7 @@ def agents(ctx: TestContext) -> None:
     def pools_page():
         return ctx.client.list_agent_pools(size=10)
 
-    # If at least one agent exists, fetch its status history
-    agent = None
-    if agents_page and agents_page.items:
-        agent = agents_page.items[0]
-
+    agent = agents_page.items[0] if agents_page and agents_page.items else None
     if not agent:
         ctx.skip("get_agent", "no agents registered on platform")
         ctx.skip("list_agent_status_history", "no agents registered on platform")
@@ -553,17 +530,12 @@ def tools(ctx: TestContext) -> None:
     def modules_page():
         return ctx.client.list_modules(size=20)
 
-    # Fetch function detail using its UUID id (not name)
-    fn = None
-    if functions_page and getattr(functions_page, "items", None):
-        fn = functions_page.items[0]
-
-    if fn:
-        fn_id = getattr(fn, "id", None)
-        if fn_id:
-            @ctx.step("get_function — fetch a function by id")
-            def function_detail():
-                return ctx.client.get_function(fn_id)
+    # get_function takes the UUID id, not the name
+    fn = functions_page.items[0] if functions_page and getattr(functions_page, "items", None) else None
+    if fn and getattr(fn, "id", None):
+        @ctx.step("get_function — fetch a function by id")
+        def function_detail():
+            return ctx.client.get_function(fn.id)
 
 
 # ── Users, tokens & admin ────────────────────────────────────────────────────

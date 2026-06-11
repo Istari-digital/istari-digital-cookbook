@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from istari_digital_client.v3.models.new_revision_relationship_dto import NewRevisionRelationshipDto
 from istari_digital_client.v3.models.resource_type_dto import ResourceTypeDto
 
 from uat.common import TestContext
@@ -51,10 +52,9 @@ def revisions(ctx: TestContext) -> None:
     """Create, list, get, download content."""
     resource = ctx.shared.get("v3_resource")
     if not resource:
-        ctx.skip("create_resource_revision", "no v3_resource in ctx — run v3_resources first")
-        ctx.skip("list_resource_revisions", "no v3_resource in ctx")
-        ctx.skip("get_resource_revision", "no v3_resource in ctx")
-        ctx.skip("get_content", "no v3_resource in ctx")
+        for step in ("create_resource_revision", "list_resource_revisions",
+                     "get_resource_revision", "get_content"):
+            ctx.skip(step, "no v3_resource in ctx — run v3_resources first")
         return
 
     rid = resource.resource_id
@@ -87,7 +87,6 @@ def revisions(ctx: TestContext) -> None:
 
     @ctx.step("get_resource_revision — fetch a specific revision by id")
     def rev():
-        assert isinstance(rid, str) and isinstance(rev_id, str)
         return ctx.v3.get_resource_revision(resource_id=rid, revision_id=rev_id)
 
     @ctx.step("get_content — download raw bytes for a revision")
@@ -101,6 +100,7 @@ def revisions(ctx: TestContext) -> None:
 # ── Comments ─────────────────────────────────────────────────────────────────
 
 def _comment_file(text: str) -> Path:
+    """create_comment takes a file path, so comment bodies go through temp files."""
     fd, path = tempfile.mkstemp(suffix=".txt")
     os.write(fd, text.encode())
     os.close(fd)
@@ -134,7 +134,6 @@ def comments(ctx: TestContext) -> None:
     @ctx.step("get_comment — fetch a specific comment by id")
     def fetched():
         assert comment, "depends on create_comment"
-        assert isinstance(rid, str) and isinstance(comment.id, str)
         return ctx.v3.get_comment(resource_id=rid, comment_id=comment.id)
 
     reply_path = _comment_file("UAT v3 reply comment")
@@ -142,7 +141,6 @@ def comments(ctx: TestContext) -> None:
     @ctx.step("create_comment (reply) — post a reply to an existing comment")
     def reply():
         assert comment, "depends on create_comment"
-        assert isinstance(rid, str) and isinstance(comment.id, str)
         return ctx.v3.create_comment(
             resource_id=rid,
             path=reply_path,
@@ -159,7 +157,6 @@ def comments(ctx: TestContext) -> None:
     @ctx.step("update_comment — edit a comment's content")
     def updated():
         assert comment, "depends on create_comment"
-        assert isinstance(rid, str) and isinstance(comment.id, str)
         return ctx.v3.update_comment(
             resource_id=rid,
             comment_id=comment.id,
@@ -171,12 +168,10 @@ def comments(ctx: TestContext) -> None:
     if reply:
         @ctx.step("archive_comment — soft-delete a comment")
         def _():
-            assert isinstance(rid, str) and isinstance(reply.id, str)
             return ctx.v3.archive_comment(resource_id=rid, comment_id=reply.id)
 
         @ctx.step("restore_comment — un-archive a comment")
         def _r():
-            assert isinstance(rid, str) and isinstance(reply.id, str)
             return ctx.v3.restore_comment(resource_id=rid, comment_id=reply.id)
 
 
@@ -185,48 +180,38 @@ def comments(ctx: TestContext) -> None:
 def relationships(ctx: TestContext) -> None:
     """List types, create relationship.
 
-    Note: list_revision_relationships returns 500 on all current environments
-    due to a SpiceDB LookupResources scaling issue (CPD-598/601). That step is
-    marked as expected-fail and will be fixed when those tickets ship.
+    NB: this links two revisions of the SAME resource (the only one the run has),
+    so the resource ends up related to itself. Fine for exercising the endpoint;
+    do not treat the resulting lineage as meaningful.
+
+    list_revision_relationships returns 500 on all current environments
+    (SpiceDB LookupResources scaling — CPD-598/601); recorded as FAIL until fixed.
     """
 
     @ctx.step("list_revision_relationship_types — enumerate available relationship types")
     def rel_types():
         return ctx.v3.list_revision_relationship_types()
 
-    rel_type_id = None
-    if rel_types and rel_types.items:
-        rel_type_id = rel_types.items[0].id
+    rel_type_id = rel_types.items[0].id if rel_types and rel_types.items else None
+    resource = ctx.shared.get("v3_resource")
 
-    rid = ctx.shared.get("v3_resource")
-    rev_id = ctx.shared.get("v3_revision_id")
-
-    if not rid or not rev_id or not rel_type_id:
+    if not resource or not ctx.shared.get("v3_revision_id") or not rel_type_id:
         ctx.skip("create_revision_relationship", "need v3_resource, v3_revision_id, and a rel type")
         ctx.skip("list_revision_relationships", "depends on create_revision_relationship")
         return
 
-    resource_id = rid.resource_id
-
     @ctx.step("list_resource_revisions — get two revision ids to link")
     def revs():
-        assert isinstance(resource_id, str)
-        return ctx.v3.list_resource_revisions(resource_id=resource_id)
+        return ctx.v3.list_resource_revisions(resource_id=resource.resource_id)
 
-    rev_a = rev_b = None
-    if revs and revs.items and len(revs.items) >= 2:
-        rev_a = revs.items[0].file_revision_id
-        rev_b = revs.items[1].file_revision_id
-
-    if not rev_a or not rev_b:
+    if not (revs and revs.items and len(revs.items) >= 2):
         ctx.skip("create_revision_relationship", "need at least 2 revisions")
         ctx.skip("list_revision_relationships", "depends on create_revision_relationship")
         return
+    rev_a, rev_b = revs.items[0].file_revision_id, revs.items[1].file_revision_id
 
     @ctx.step("create_revision_relationship — link two revisions with a typed relationship")
     def rel():
-        from istari_digital_client.v3.models.new_revision_relationship_dto import NewRevisionRelationshipDto
-        assert isinstance(rev_a, str) and isinstance(rev_b, str) and isinstance(rel_type_id, str)
         return ctx.v3.create_revision_relationship(
             new_revision_relationship_dto=NewRevisionRelationshipDto(
                 left_revision_id=rev_a,
@@ -235,10 +220,8 @@ def relationships(ctx: TestContext) -> None:
             )
         )
 
-    # Returns 500 server-side (CPD-598/601); ctx.step records the FAIL.
     @ctx.step("list_revision_relationships — list relationships for a revision [known 500 — CPD-598]")
     def rels():
-        assert isinstance(rev_a, str)
         return ctx.v3.list_revision_relationships(revision_id=rev_a)
 
 
@@ -254,9 +237,7 @@ def remotes(ctx: TestContext) -> None:
     if sending and sending.items:
         @ctx.step("get_sending_remote — fetch a sending remote by id")
         def _():
-            remote_id = sending.items[0].id
-            assert isinstance(remote_id, str)
-            return ctx.v3.get_sending_remote(remote_id=remote_id)
+            return ctx.v3.get_sending_remote(remote_id=sending.items[0].id)
     else:
         ctx.skip("get_sending_remote", "list_sending_remotes failed or returned no remotes")
 
@@ -267,8 +248,6 @@ def remotes(ctx: TestContext) -> None:
     if receiving and receiving.items:
         @ctx.step("get_receiving_remote — fetch a receiving remote by id")
         def _r():
-            remote_id = receiving.items[0].id
-            assert isinstance(remote_id, str)
-            return ctx.v3.get_receiving_remote(remote_id=remote_id)
+            return ctx.v3.get_receiving_remote(remote_id=receiving.items[0].id)
     else:
         ctx.skip("get_receiving_remote", "list_receiving_remotes failed or returned no remotes")
