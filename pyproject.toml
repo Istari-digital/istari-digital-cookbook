@@ -21,14 +21,9 @@ classifiers = [
 ]
 
 [dependency-groups]
+# Core Istari client recipes (org-admin, resources, validation, …).
 dev = [
     "istari-digital-client==10.11.1",
-    "ipython>=8.0",
-    "jinja2>=3.1",
-    "matplotlib>=3.8",
-    "numpy>=1.26",
-    "pandas>=2.0",
-    "pytest>=8.0",
     "python-dotenv>=1.0",
     "pre-commit>=3.8.0",
     "ruff>=0.5.0",
@@ -37,6 +32,15 @@ dev = [
     "ipykernel>=6.29",
     "nbclient>=0.10.2",
     "nbformat>=5.10.4",
+]
+# Workflow-logs walkthrough: tables, plots, pytest tradespace sweep.
+advanced = [
+    "ipython>=8.0",
+    "jinja2>=3.1",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "pytest>=8.0",
 ]
 
 [tool.ruff.lint.per-file-ignores]
