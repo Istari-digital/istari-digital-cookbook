@@ -83,6 +83,9 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Scratch dirs written by samples/workflow-log/workflow_log_demo.ipynb
+_notebook_run/
+
 # IPython
 profile_default/
 ipython_config.py

@@ -31,11 +31,20 @@ dev = [
     "ipykernel>=6.29",
     "nbclient>=0.10.2",
     "nbformat>=5.10.4",
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pytest>=8.0",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Notebooks: nbqa joins cells with separators; imports in later cells trigger E402 falsely.
 "**/*.ipynb" = ["E402"]
+
+[tool.nbqa.addopts]
+# nbqa runs ruff on a temp .py copy, so the .ipynb per-file-ignores above never
+# match — repeat the E402 exemption here for the nbqa-ruff pre-commit hook.
+ruff = ["--extend-ignore=E402"]
 
 [tool.nbqa.config]
 addopts = ["--nbqa-mutate"]

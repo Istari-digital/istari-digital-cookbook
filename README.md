@@ -34,6 +34,7 @@ The notebooks cover the same platform concepts whether they use **`istari_labs_h
 | [`samples/resources/connect-resources-twc.ipynb`](samples/resources/connect-resources-twc.ipynb) | Official client (`istari_digital_client`) | Teamwork Cloud: upload pointer file (connected `mdel://` link), TWC auth, `@istari:twc_extract`. |
 | [`samples/org-admin/org-admin-tasks.ipynb`](samples/org-admin/org-admin-tasks.ipynb) | Official client (`istari_digital_client`) | Org admin: find user by email, list tools, grant executor access to all tools. |
 | [`samples/resources/resources_misc_labs_helpers.ipynb`](samples/resources/resources_misc_labs_helpers.ipynb) | `istari_labs_helpers` | Model registration, text uploads, search, and bulk patterns for platform resources. |
+| [`samples/workflow-log/workflow_log_demo.ipynb`](samples/workflow-log/workflow_log_demo.ipynb) | Official client (`V3Client` + v2 `Client`) | External workflow logs: capture outside-Istari runs (workflow outputs + pass/fail log entries) against a system configuration — a design loop and a tradespace sweep. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Official client (`istari_digital`) | Extract metadata from a CATIA `.CATPart`. |
 
 Each notebook is self-contained and explains its own setup in the first cell — open the one you want and follow the prerequisites there.
