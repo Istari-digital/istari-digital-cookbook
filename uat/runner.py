@@ -23,6 +23,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import argparse
 import importlib
+import inspect
 from datetime import datetime
 
 from uat.common import (
@@ -36,49 +37,37 @@ from uat.common import (
 )
 
 # ---------------------------------------------------------------------------
-# Suite registry — "module.function" in uat/v2.py and uat/v3.py; section order
-# mirrors the docs pages (api_reference/client and v3/v3-client respectively)
-# and still satisfies cross-suite dependencies.
+# Suites are auto-discovered: every public `(ctx)` function in uat/v2.py and uat/v3.py
+# is a suite, run in definition order (which mirrors the docs pages and satisfies the
+# cross-suite deps — each suite also skip-guards its own inputs, so order isn't fragile).
+# No registry to keep in sync: define a function, it runs.
 # ---------------------------------------------------------------------------
 
-SUITES: list[str] = [
-    "v2.files",
-    "v2.models",         # → stores "model"
-    "v2.artifacts",      # needs "model"
-    "v2.revisions",      # needs "model"
-    "v2.jobs",
-    "v2.systems",        # needs "model" → stores "system", "configuration"
-    "v2.snapshots",      # needs "system", "configuration"
-    "v2.access",         # needs "model"
-    "v2.control_tags",   # needs "model"
-    "v2.documents",      # needs "configuration"
-    "v2.agents",
-    "v2.tools",
-    "v2.users",
-    "v3.resources",      # → stores "v3_resource"
-    "v3.revisions",      # needs "v3_resource"
-    "v3.comments",       # needs "v3_resource"
-    "v3.relationships",  # self-contained (creates parent+child); list xfail — CPD-598
-    "v3.remotes",
-]
+def _discover(modname: str) -> list[str]:
+    """'module.function' for each public function defined in uat.<modname>, in def order.
+    (module __dict__ preserves definition order; imports/helpers/`_`-prefixed are skipped.)"""
+    mod = importlib.import_module(f"uat.{modname}")
+    return [f"{modname}.{name}" for name, obj in vars(mod).items()
+            if inspect.isfunction(obj) and not name.startswith("_") and obj.__module__ == mod.__name__]
 
-# CLI names: v2.files → v2_files (unchanged from the one-file-per-suite layout)
-_SHORT_TO_FULL = {s.replace(".", "_"): s for s in SUITES}
-_SHORT_TO_FULL.update({s: s for s in SUITES})  # also accept dotted names
+
+def _all_suites() -> list[str]:
+    return _discover("v2") + _discover("v3")
 
 
 def _resolve_suites(spec: str | None) -> list[str]:
+    suites = _all_suites()
     if not spec:
-        return SUITES
-    names = [s.strip() for s in spec.split(",") if s.strip()]
-    resolved = []
-    for name in names:
-        if name not in _SHORT_TO_FULL:
+        return suites
+    by_name = {s.replace(".", "_"): s for s in suites}
+    by_name.update({s: s for s in suites})  # also accept dotted names
+    resolved: list[str] = []
+    for name in (s.strip() for s in spec.split(",") if s.strip()):
+        if name not in by_name:
             print(f"Unknown suite: {name!r}. Run --list to see available suites.", file=sys.stderr)
             sys.exit(1)
-        full = _SHORT_TO_FULL[name]
-        if full not in resolved:
-            resolved.append(full)
+        if by_name[name] not in resolved:
+            resolved.append(by_name[name])
     return resolved
 
 
@@ -112,15 +101,12 @@ def main() -> None:
                         help="comma-separated suites to run; default all")
     parser.add_argument("--no-cleanup", action="store_true",
                         help="skip archiving resources created during the run")
-    parser.add_argument("--baseline", action="store_true",
-                        help="take an entity-count baseline before the run "
-                             "(adds per-step platform_state; use on a dedicated perf env)")
     parser.add_argument("--list", action="store_true", help="print available suite names and exit")
     args = parser.parse_args()
 
     if args.list:
         print("Available suites (pass short name to --suite):")
-        for s in SUITES:
+        for s in _all_suites():
             print(f"  {s.replace('.', '_'):<28}  (uat/{s.split('.')[0]}.py)")
         return
 
@@ -134,8 +120,7 @@ def main() -> None:
         log.error(str(exc))
         sys.exit(1)
 
-    if args.baseline:
-        take_baseline(ctx)
+    take_baseline(ctx)  # always — every run records the footprint (before + recheck after)
 
     suites = _resolve_suites(args.suite)
     log.info(f"Running {len(suites)} suite(s): {', '.join(s.replace('.', '_') for s in suites)}")
@@ -145,8 +130,7 @@ def main() -> None:
 
     ctx.cleanup()
 
-    if args.baseline:  # re-measure footprint; records ctx.drift + logs footprint growth
-        recheck_baseline(ctx)
+    recheck_baseline(ctx)  # re-measure footprint; records ctx.drift + logs footprint growth
 
     results_path = write_results(ctx, [s.replace(".", "_") for s in suites])
 

@@ -43,12 +43,8 @@ class Status(str, Enum):
 
 @dataclass
 class PlatformCounts:
-    """Platform-wide entity counts at a point in time.
-
-    Used as ctx.baseline (measured) and StepResult.platform_state (derived as
-    baseline + tracked delta). -1 means that type could not be counted; it
-    stays -1 in derived snapshots.
-    """
+    """Platform-wide entity counts at a point in time (ctx.baseline before the run,
+    ctx.final_counts after). -1 means that type could not be counted."""
     taken_at: str
     env: str
     files: int = 0
@@ -74,9 +70,6 @@ class StepResult:
     status: Status
     error: str = ""
     duration_s: float = 0.0
-    # counts when the step *began* (latency is a function of pre-step footprint);
-    # None when no baseline was taken.
-    platform_state: PlatformCounts | None = None
 
 
 def setup_logging(run_id: str) -> logging.Logger:
@@ -140,22 +133,6 @@ class TestContext:
         self.track(entity_type, rid)
         self.shared[share_key or entity_type] = resource
 
-    def _snapshot_state(self) -> PlatformCounts | None:
-        """Derived counts now: baseline + tracked-so-far per type (-1 stays -1)."""
-        base = self.baseline
-        if base is None:
-            return None
-
-        def derived(field: str, tracked_key: str) -> int:
-            count = getattr(base, field)
-            return count if count < 0 else count + len(self._tracked.get(tracked_key, []))
-
-        return PlatformCounts(
-            taken_at=datetime.now(timezone.utc).isoformat(),
-            env=base.env,
-            **{field: derived(field, key) for field, key in _COUNT_FIELD_TO_TRACKED.items()},
-        )
-
     # ── steps ────────────────────────────────────────────────────────────
 
     def step(self, description: str) -> Callable:
@@ -164,7 +141,6 @@ class TestContext:
         failure). See module docstring."""
         def decorator(fn: Callable) -> Any:
             self._log.info(f"  [{self._current_suite}] {description}")
-            pre_state = self._snapshot_state()
             t0 = time.perf_counter()
             try:
                 result = fn()
@@ -175,7 +151,7 @@ class TestContext:
                 msg = (str(exc) or "assertion failed") if isinstance(exc, AssertionError) \
                     else f"{type(exc).__name__}: {exc}"
             duration = time.perf_counter() - t0
-            self._record(description, status, msg, duration_s=duration, platform_state=pre_state)
+            self._record(description, status, msg, duration_s=duration)
             if status is Status.PASS:
                 self._log.debug(f"    PASS  ({duration:.3f}s)")
             else:
@@ -226,10 +202,10 @@ class TestContext:
     # ── results ──────────────────────────────────────────────────────────
 
     def _record(self, description: str, status: Status, error: str = "",
-                duration_s: float = 0.0, platform_state: PlatformCounts | None = None) -> None:
+                duration_s: float = 0.0) -> None:
         self._results.append(StepResult(
             suite=self._current_suite, description=description, status=status,
-            error=error, duration_s=duration_s, platform_state=platform_state,
+            error=error, duration_s=duration_s,
         ))
 
     def summary(self) -> dict[Status, int]:
@@ -300,7 +276,7 @@ def _measure_counts(ctx: TestContext, per_call_timeout_s: float) -> PlatformCoun
     return PlatformCounts(taken_at=datetime.now(timezone.utc).isoformat(), env=ctx.env, **counts)
 
 
-def take_baseline(ctx: TestContext, per_call_timeout_s: float = 15.0) -> PlatformCounts:
+def take_baseline(ctx: TestContext, per_call_timeout_s: float = 90.0) -> PlatformCounts:
     """Measure counts before the run onto ctx.baseline (see _measure_counts).
 
     WARNING: counts drift if others are active on the env; use a dedicated perf env.
@@ -311,7 +287,7 @@ def take_baseline(ctx: TestContext, per_call_timeout_s: float = 15.0) -> Platfor
     return ctx.baseline
 
 
-def recheck_baseline(ctx: TestContext, per_call_timeout_s: float = 15.0) -> list[tuple[str, int, int]]:
+def recheck_baseline(ctx: TestContext, per_call_timeout_s: float = 90.0) -> list[tuple[str, int, int]]:
     """Re-measure after the run; record drift onto ctx.drift / ctx.final_counts.
 
     Archive is a soft-delete, so cleanup never shrinks the footprint:
@@ -363,7 +339,6 @@ def write_results(ctx: TestContext, suites_run: list[str]) -> Path:
                 "status": r.status,
                 "duration_s": round(r.duration_s, 4),
                 **({"error": r.error} if r.error else {}),
-                **({"platform_state": asdict(r.platform_state)} if r.platform_state else {}),
             }
             for r in ctx._results
         ],

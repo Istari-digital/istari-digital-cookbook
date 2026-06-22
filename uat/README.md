@@ -68,18 +68,19 @@ Suite names on the CLI are `{file}_{function}` (e.g. `--suite v2_models,v3_comme
 
 ---
 
-## Baselining (`--baseline`)
+## Baselining (always on)
 
-`--baseline` measures the platform's **total entity footprint** before and after the
-run (attaching per-step `platform_state` and writing `baseline` + `final_counts` to
-the results JSON).
+Every UAT run measures the platform's **total entity footprint** before and after the
+run (writing `baseline` + `final_counts` + any `drift` to the results JSON). It's
+automatic — there's no flag; there's never a reason to skip it.
 
 Counts pass **no** `archive_status` (default scope). We *wanted* `"all"` (archive is a
 soft-delete — archived rows persist and are still walked by the SpiceDB scan, CPD-598/601,
 which is what drives latency), but passing `archive_status` at all forces a slow query path
 that **times out** on a populated env; the default path returns. On `--no-cleanup`
 benchmarking nothing is archived, so default (active) == all anyway. Counts run in parallel
-against `--baseline-timeout` (default 90s) so the baseline waits once, not per-type; the
+against a single deadline (90s for `uat.runner`; `uat.perf` raises it via `--baseline-timeout`,
+default 180s) so the baseline waits once, not per-type; the
 heaviest types (`files`/`artifacts`/`v3 list_resources`) still 500 at large footprints and
 record `-1`. Cleanup only archives, so it never shrinks the footprint: each run permanently
 grows the env and repeated runs degrade it (on `perf`, a ~23s run became 6 min after a few

@@ -16,12 +16,14 @@ pushed** (the user always pushes).
    docs site, re-checked when adding suites (last verified 2026-06-10): v2 = sections of
    [api_reference/client](https://docs.istaridigital.com/developers/SDK/api_reference/client/),
    v3 = sections of [v3/v3-client](https://docs.istaridigital.com/developers/SDK/v3/v3-client/).
-   That check moved `v3_comments`/`v3_remotes` into `SUITES` (now documented) and deleted
-   `v2_change_requests` (absent from docs and SDK). Remaining documented-but-unsuited gaps
+   That check added `v3_comments`/`v3_remotes` suites (now documented) and deleted
+   `v2_change_requests` (absent from docs and SDK). Suites are **auto-discovered** — every
+   public `(ctx)` function in `v2.py`/`v3.py` runs, in definition order; no registry to
+   maintain. Remaining documented-but-unsuited gaps
    are listed in `uat/README.md` (v2 infosec levels, v3 workflow logs, v3 archive/restore
    as steps, v3 remote create/update).
-2. **Baselining** (`--baseline`) — measures platform entity-count footprint before
-   and after a run; records per-step `platform_state` and post-run drift.
+2. **Baselining** (always on, no flag) — every UAT run measures platform entity-count
+   footprint before and after; records per-step `platform_state` and post-run drift.
 3. **Perf measurement** (`uat/perf/`) — separate harness: run endpoints N times per
    env, record per-call latency as a time series. CLI: `python -m uat.perf` (`perf`).
    Two op styles:
@@ -63,9 +65,11 @@ So:
   (verified on perf: default `list_models`=1019 where `archive_status` all/active both
   timed out). So `_measure_counts` now passes **no** `archive_status` (default scope =
   active; on `--no-cleanup` benchmarking nothing is archived, so active == all). Counts
-  also run in **parallel** against one `--baseline-timeout` deadline (default 90s), so the
-  baseline waits once, not ×7. `models`/`systems`/`documents`/`jobs` return; `files`/
-  `artifacts`/`v3_resources` still hit the CPD-598 500 and record `-1`.
+  also run in **parallel** against one deadline (90s for `uat.runner`; `uat.perf` raises it
+  via `--baseline-timeout`, default 180s), so the baseline waits once, not ×7.
+  `models`/`systems`/`documents`/`jobs` return; `files`/`artifacts`/`v3_resources` still hit
+  the CPD-598 500 and record `-1`. Note: even 180s isn't always enough on a hammered perf —
+  `models` (~1019 rows) bounces around the deadline and a concurrent run pushes it to 500s.
 - And `recheck_baseline` expects `final == baseline + resources_created` (cleanup
   does not reduce the count), warning on any other drift.
 
@@ -81,7 +85,7 @@ clean for benchmarking is a disposable/reset tenant.
 uat/
   common.py        TestContext, @ctx.step, baseline (take_baseline/recheck_baseline),
                    cleanup (_archive_one dispatch), write_results, build_context
-  runner.py        UAT CLI: suite registry, --baseline, end summary (failures + drift)
+  runner.py        UAT CLI: suite auto-discovery, always-on baseline, end summary (failures + drift)
   v2.py v3.py      correctness suites, one function per docs topic
                    (intentionally repetitive = example code)
   visualize.py     run JSON + perf JSONL → one self-contained HTML report (plotly/CDN)
@@ -136,9 +140,9 @@ Per-env behavior is inconsistent and shifts day to day; treat this as a snapshot
   environments" — don't trust that comment.
 - **v3 comments**: PASS on perf, but `create_comment`/`list_comments` → 500 on dev.
 - **v3 remotes**: dev has remotes configured (get/list pass); on perf the list calls 500.
-- **perf is severely degraded**: a full `--baseline` run came back all `-1` (every count
+- **perf is severely degraded**: a full run came back all `-1` (every count
   timed out); `create_control_tag` shifted from 403 → 500 (error mode itself is unstable).
-- **dev `--baseline` drift is real but benign**: a full run showed `models Δ+1, artifacts
+- **dev baseline drift is real but benign**: a full run showed `models Δ+1, artifacts
   Δ+13` over expected — job *outputs* create resources the suite doesn't track. Not a code
   bug; it's an accounting gap (see open decisions).
 - dev broadly degraded: `get_resource` 500 after 166s — contradicts the memory note that
@@ -164,7 +168,7 @@ Per-env behavior is inconsistent and shifts day to day; treat this as a snapshot
 2. **`control_tags` 403/500 on perf:** expected (skip when perm absent) or should the perf
    token get the permission?
 3. **Job-output drift:** on envs where jobs actually run (dev), job outputs create
-   resources the suite doesn't track → `--baseline` reports drift. Track job outputs, or
+   resources the suite doesn't track → the baseline reports drift. Track job outputs, or
    document the expected drift as benign?
 4. **Duplicate `produces` edges:** unverified whether the platform rejects them; the chain
    avoids the question by construction (distinct consecutive pairs only).
@@ -219,7 +223,7 @@ relationship → grows the SpiceDB footprint (feeds CPD-598). v3 has no user-acc
 ```bash
 PY=istari-labs-helpers/.venv/bin/python
 $PY -m uat.runner --list
-$PY -m uat.runner --env perf --baseline
+$PY -m uat.runner --env perf            # always baselines (before + recheck) — no flag
 $PY -m uat.perf   --env perf --ops add_model --repeat 10
 $PY -m uat.perf   --env perf --ops create_resource,create_revision_relationship --repeat 10
 $PY -m uat.perf   --make-junk 100                              # writes uat/data/junk_100mb.bin
