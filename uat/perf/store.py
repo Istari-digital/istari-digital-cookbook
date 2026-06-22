@@ -32,6 +32,9 @@ class Sample:
     duration_s: float
     status: str            # "ok" | "error"
     error: str = ""
+    upload_mb: float | None = None    # payload size for this run's uploads (None = dummy.txt)
+    resource_id: str | None = None    # created model/file/resource id — for server-log correlation
+    revision_id: str | None = None    # created file-revision id
 
 
 def samples_path(env: str) -> Path:
@@ -58,6 +61,7 @@ def write_samples(samples: list[Sample]) -> None:
         _append_jsonl(samples_path(env), rows)
 
 
-def write_baseline(run_id: str, baseline: Any) -> None:
-    """Append one footprint row (a PlatformCounts: .env, .taken_at, + counts)."""
-    _append_jsonl(baseline_path(baseline.env), [{"run_id": run_id, **asdict(baseline)}])
+def write_baseline(run_id: str, baseline: Any, extra: dict | None = None) -> None:
+    """Append one footprint row (a PlatformCounts: .env, .taken_at, + counts).
+    `extra` merges extra per-run context (e.g. network ul_mbps/dl_mbps/rpm)."""
+    _append_jsonl(baseline_path(baseline.env), [{"run_id": run_id, **asdict(baseline), **(extra or {})}])

@@ -186,3 +186,6 @@ cython_debug/
 # UAT results (logs + JSON per run; .gitkeep keeps the dir tracked)
 uat/results/
 !uat/results/.gitkeep
+
+# perf junk upload payloads (generated)
+uat/data/junk_*

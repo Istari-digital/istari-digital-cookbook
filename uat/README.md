@@ -74,12 +74,17 @@ Suite names on the CLI are `{file}_{function}` (e.g. `--suite v2_models,v3_comme
 run (attaching per-step `platform_state` and writing `baseline` + `final_counts` to
 the results JSON).
 
-Counts use `archive_status="all"` on purpose: **archive is a soft-delete** — archived
-rows still exist and are still walked by the SpiceDB permission scan on every list call
-(CPD-598/601), so they are what drives latency. Cleanup only archives, so it never
-shrinks the footprint: each run permanently grows the env and repeated runs degrade it
-(on `perf`, a ~23s run became 6 min after a few rounds). Because created resources
-persist, the post-run check expects `final == baseline + created` and warns on any drift
+Counts pass **no** `archive_status` (default scope). We *wanted* `"all"` (archive is a
+soft-delete — archived rows persist and are still walked by the SpiceDB scan, CPD-598/601,
+which is what drives latency), but passing `archive_status` at all forces a slow query path
+that **times out** on a populated env; the default path returns. On `--no-cleanup`
+benchmarking nothing is archived, so default (active) == all anyway. Counts run in parallel
+against `--baseline-timeout` (default 90s) so the baseline waits once, not per-type; the
+heaviest types (`files`/`artifacts`/`v3 list_resources`) still 500 at large footprints and
+record `-1`. Cleanup only archives, so it never shrinks the footprint: each run permanently
+grows the env and repeated runs degrade it (on `perf`, a ~23s run became 6 min after a few
+rounds). Because created resources persist, the post-run check expects `final == baseline +
+created` and warns on any drift
 (another user's activity, an untracked resource, or a hard delete). Run on a disposable
 tenant — never trust baseline numbers from a shared env.
 
@@ -92,13 +97,34 @@ record per-call latency as a time series, for dashboards.
 
 ```bash
 python -m uat.perf --list                                   # available operations
-python -m uat.perf --env perf --ops upload_model --repeat 10
+python -m uat.perf --env perf --ops add_model --repeat 10
 python -m uat.perf --env dev,stage --repeat 20              # several envs, one run_id
+# uploads then a relationship chain over the v3 pool (10 creates → 9 timed links):
+python -m uat.perf --env perf --ops create_resource,create_revision_relationship --repeat 10
+# heavy uploads — make a junk payload, then upload it repeatedly:
+python -m uat.perf --make-junk 100                          # writes uat/data/junk_100mb.bin, exits
+python -m uat.perf --env perf --ops add_model --repeat 20 --upload-mb 100
 ```
+
+**Junk payloads.** `--make-junk MB` writes `uat/data/junk_{MB}mb.bin` (random bytes,
+gitignored) and exits. `--upload-mb MB` makes the upload ops (`add_model`, `add_file`,
+`create_resource`) send a junk file of that size instead of `dummy.txt` (auto-generated,
+cached by size). Caveat: uploading the *same* file repeatedly may hit the platform's
+content dedup (we've seen token-SHA conflicts), so identical repeated uploads can measure
+dedup rather than full transfer — flag if you need true per-upload transfer numbers.
 
 The package separates concerns: `operations.py` (*what* to measure — the endpoint
 catalog), `measure.py` (*how* — the timed repeat loop), `store.py` (persistence — the
 dashboard contract), `report.py` (console summary), `runner.py` (CLI + multi-env loop).
+
+**Uploads vs. the relationship chain.** Most ops run `--repeat` times. The two v2 upload
+endpoints (`add_model`, `add_file`) and the v3 `create_resource` are independent upload
+testers — each timed call creates one resource. `create_resource` additionally pools its
+revision id, so `create_revision_relationship` (which is v3-only) can run *after* it and
+time a `produces` chain across the pool: N pooled revisions → N−1 timed links, each a
+distinct consecutive pair (never self-referential). Its sample count is therefore derived
+from the pool, not `--repeat`; run it without `create_resource` (or with `--repeat 1`) and
+it skips with a logged reason rather than inventing inputs.
 
 Each run appends to two per-env JSONL streams under `results/perf/` (gitignored):
 

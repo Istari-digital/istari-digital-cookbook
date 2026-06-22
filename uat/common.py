@@ -249,50 +249,55 @@ class TestContext:
 def _measure_counts(ctx: TestContext, per_call_timeout_s: float) -> PlatformCounts:
     """Total entity footprint: one size=1 list call per type, read page.total.
 
-    Counts include archived resources (archive_status="all"): archive is a
-    soft-delete and archived rows still drive the SpiceDB permission scan on
-    every list call (CPD-598/601), so they are what determines latency — see
-    uat/README.md. Each count runs in a daemon thread bounded by
-    per_call_timeout_s; a slow or failing one is recorded as -1.
+    NO archive_status filter — verified on perf that passing it (even "active") forces a
+    slow query path that times out on a populated env, while the default path returns
+    (default list_models gave 1019 where archive_status=all/active both timed out). So
+    counts are default-scope (active); on --no-cleanup benchmarking nothing is archived,
+    so active == all. (This reverses the earlier "count archived too" choice — a real
+    number beats a principled -1.)
+
+    Calls run in PARALLEL daemon threads against a shared deadline, so the whole baseline
+    waits ~per_call_timeout_s once, not ×7 — important because the hardest types
+    (list_files/list_artifacts/v3 list_resources) still hit the CPD-598 500/timeout at
+    large footprints and each burns the full budget. A slow/failed/timed-out call → -1.
     """
-    from istari_digital_client.v2.models.archive_status import ArchiveStatus as V2ArchiveStatus
-    from istari_digital_client.v3.models.archive_status import ArchiveStatus as V3ArchiveStatus
-
-    def _count(list_fn: Callable, **kwargs: Any) -> int:
-        # Outcome lands in `box`; all logging happens on this thread after the
-        # join, so an abandoned thread that finishes late never logs.
+    targets: dict[str, Callable | None] = {
+        "files": ctx.client.list_files, "models": ctx.client.list_models,
+        "artifacts": ctx.client.list_artifacts, "systems": ctx.client.list_systems,
+        "documents": ctx.client.list_documents, "jobs": ctx.client.list_jobs,
+        "v3_resources": ctx.v3.list_resources if ctx.v3 else None,
+    }
+    boxes: dict[str, dict] = {}
+    threads: dict[str, threading.Thread] = {}
+    for field, fn in targets.items():
+        if fn is None:
+            continue
         box: dict[str, Any] = {"value": None, "exc": None}
+        boxes[field] = box
 
-        def _work() -> None:
+        def _work(fn=fn, box=box) -> None:
             try:
-                total = getattr(list_fn(size=1, **kwargs), "total", None)
+                total = getattr(fn(size=1), "total", None)
                 box["value"] = -1 if total is None else total
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — surfaced via box, logged after join
                 box["exc"] = exc
 
         t = threading.Thread(target=_work, daemon=True)
+        threads[field] = t
         t.start()
-        t.join(per_call_timeout_s)
-        if t.is_alive():
-            ctx._log.warning(f"baseline: {list_fn.__name__} exceeded {per_call_timeout_s}s; recording -1")
-            return -1
-        if box["exc"] is not None:
-            ctx._log.warning(f"baseline: could not count via {list_fn.__name__}: {box['exc']}")
-            return -1
-        return box["value"]
 
-    v2_all, v3_all = V2ArchiveStatus.ALL, V3ArchiveStatus.ALL
-    return PlatformCounts(
-        taken_at=datetime.now(timezone.utc).isoformat(),
-        env=ctx.env,
-        files=_count(ctx.client.list_files, archive_status=v2_all),
-        models=_count(ctx.client.list_models, archive_status=v2_all),
-        artifacts=_count(ctx.client.list_artifacts, archive_status=v2_all),
-        systems=_count(ctx.client.list_systems, archive_status=v2_all),
-        documents=_count(ctx.client.list_documents, archive_status=v2_all),
-        jobs=_count(ctx.client.list_jobs, archive_status=v2_all),
-        v3_resources=_count(ctx.v3.list_resources, archive_status=v3_all) if ctx.v3 else -1,
-    )
+    deadline = time.monotonic() + per_call_timeout_s
+    counts: dict[str, int] = {f: -1 for f in targets}
+    for field, t in threads.items():
+        t.join(max(0.0, deadline - time.monotonic()))
+        box = boxes[field]
+        if t.is_alive():
+            ctx._log.warning(f"baseline: {field} exceeded {per_call_timeout_s:.0f}s; recording -1")
+        elif box["exc"] is not None:
+            ctx._log.warning(f"baseline: could not count {field}: {box['exc']}")
+        else:
+            counts[field] = box["value"]
+    return PlatformCounts(taken_at=datetime.now(timezone.utc).isoformat(), env=ctx.env, **counts)
 
 
 def take_baseline(ctx: TestContext, per_call_timeout_s: float = 15.0) -> PlatformCounts:

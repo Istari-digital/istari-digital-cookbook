@@ -58,7 +58,7 @@ SUITES: list[str] = [
     "v3.resources",      # → stores "v3_resource"
     "v3.revisions",      # needs "v3_resource"
     "v3.comments",       # needs "v3_resource"
-    "v3.relationships",  # needs "v3_resource" (list xfail — CPD-598)
+    "v3.relationships",  # self-contained (creates parent+child); list xfail — CPD-598
     "v3.remotes",
 ]
 

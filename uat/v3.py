@@ -178,11 +178,10 @@ def comments(ctx: TestContext) -> None:
 # ── Revision relationships ───────────────────────────────────────────────────
 
 def relationships(ctx: TestContext) -> None:
-    """List types, create relationship.
+    """List types, then link a parent resource to a distinct child resource.
 
-    NB: this links two revisions of the SAME resource (the only one the run has),
-    so the resource ends up related to itself. Fine for exercising the endpoint;
-    do not treat the resulting lineage as meaningful.
+    Creates two fresh resources (parent → child) so the relationship is between
+    two different files — never a resource related to itself.
 
     list_revision_relationships returns 500 on all current environments
     (SpiceDB LookupResources scaling — CPD-598/601); recorded as FAIL until fixed.
@@ -192,37 +191,54 @@ def relationships(ctx: TestContext) -> None:
     def rel_types():
         return ctx.v3.list_revision_relationship_types()
 
-    rel_type_id = rel_types.items[0].id if rel_types and rel_types.items else None
-    resource = ctx.shared.get("v3_resource")
-
-    if not resource or not ctx.shared.get("v3_revision_id") or not rel_type_id:
-        ctx.skip("create_revision_relationship", "need v3_resource, v3_revision_id, and a rel type")
-        ctx.skip("list_revision_relationships", "depends on create_revision_relationship")
+    # The platform's built-in relationship type is `produces` (a model revision
+    # produces an artifact revision); select it by name, not list position. Fall
+    # back to the first type if a registry ever renames or adds others.
+    types = rel_types.items if rel_types else []
+    rel_type = next((t for t in types if t.name.lower() == "produces"), types[0] if types else None)
+    if not rel_type:
+        for step in ("create_resource (parent)", "create_resource (child)",
+                     "create_revision_relationship", "list_revision_relationships"):
+            ctx.skip(step, "no relationship type available")
         return
 
-    @ctx.step("list_resource_revisions — get two revision ids to link")
-    def revs():
-        return ctx.v3.list_resource_revisions(resource_id=resource.resource_id)
+    @ctx.step("create_resource (MODEL) — the source/parent that `produces` the child")
+    def parent():
+        return ctx.v3.create_resource(
+            path=ctx.data("dummy.txt"),
+            resource_type=ResourceTypeDto.MODEL,
+            display_name="UAT v3 Relationship Parent",
+        )
 
-    if not (revs and revs.items and len(revs.items) >= 2):
-        ctx.skip("create_revision_relationship", "need at least 2 revisions")
-        ctx.skip("list_revision_relationships", "depends on create_revision_relationship")
-        return
-    rev_a, rev_b = revs.items[0].file_revision_id, revs.items[1].file_revision_id
+    if parent:
+        ctx.track("v3_resource", parent.resource_id)
 
-    @ctx.step("create_revision_relationship — link two revisions with a typed relationship")
+    @ctx.step("create_resource (ARTIFACT) — the derived/child produced by the parent")
+    def child():
+        return ctx.v3.create_resource(
+            path=ctx.data("dummy.txt"),
+            resource_type=ResourceTypeDto.ARTIFACT,
+            display_name="UAT v3 Relationship Child",
+        )
+
+    if child:
+        ctx.track("v3_resource", child.resource_id)
+
+    @ctx.step("create_revision_relationship — parent `produces` child (left → right)")
     def rel():
+        assert parent and child, "depends on both resources being created"
         return ctx.v3.create_revision_relationship(
             new_revision_relationship_dto=NewRevisionRelationshipDto(
-                left_revision_id=rev_a,
-                right_revision_id=rev_b,
-                relationship_type_id=rel_type_id,
+                left_revision_id=parent.file_revision_id,
+                right_revision_id=child.file_revision_id,
+                relationship_type_id=rel_type.id,
             )
         )
 
     @ctx.step("list_revision_relationships — list relationships for a revision [known 500 — CPD-598]")
     def rels():
-        return ctx.v3.list_revision_relationships(revision_id=rev_a)
+        assert parent, "depends on parent resource"
+        return ctx.v3.list_revision_relationships(revision_id=parent.file_revision_id)
 
 
 # ── Remote connections ───────────────────────────────────────────────────────

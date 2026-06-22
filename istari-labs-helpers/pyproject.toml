@@ -28,6 +28,7 @@ experiment = [
 [project.scripts]
 uat = "istari_labs_helpers._uat_entry:main"
 perf = "istari_labs_helpers._perf_entry:main"
+viz = "istari_labs_helpers._viz_entry:main"
 
 [build-system]
 requires = ["hatchling"]
