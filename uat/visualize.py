@@ -156,6 +156,9 @@ def perf_unknown_runs(env: str) -> go.Figure | None:
     fig.update_traces(marker_size=5, jitter=0.4)
     fig.update_layout(xaxis_title="run", yaxis_title="seconds (log scale)",
                       showlegend=False, height=440)
+    # force discrete, evenly-spaced run columns (else plotly reads the date-like labels
+    # as a continuous time axis and bunches them up)
+    fig.update_xaxes(type="category", categoryorder="category ascending")
     return fig
 
 
