@@ -62,8 +62,8 @@ def main() -> None:
                         help="abandon any single call after S seconds → 'timeout' sample (default: 300)")
     parser.add_argument("--no-network", action="store_true",
                         help="skip the macOS networkQuality uplink measurement (on by default, ~20s at run start)")
-    parser.add_argument("--baseline-timeout", type=float, default=90.0, metavar="S",
-                        help="baseline deadline — all list counts run in parallel against it (default 90)")
+    parser.add_argument("--baseline-timeout", type=float, default=180.0, metavar="S",
+                        help="baseline deadline — all list counts run in parallel against it (default 180)")
     parser.add_argument("--list", action="store_true", help="print available operations and exit")
     args = parser.parse_args()
 
