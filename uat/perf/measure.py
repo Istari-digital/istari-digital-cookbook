@@ -17,7 +17,6 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timezone
-from logging import Logger
 from typing import Callable
 
 from uat.common import TestContext
@@ -59,7 +58,6 @@ def measure(
     ctx: TestContext,
     ops: list[Operation],
     repeat: int,
-    log: Logger,
     call_timeout_s: float = 300.0,
     on_sample: Callable[[Sample], None] | None = None,
 ) -> list[Sample]:
@@ -69,14 +67,14 @@ def measure(
             try:
                 op.setup(ctx)
             except Exception as exc:  # noqa: BLE001 — fixture failed; skip this op
-                log.error(f"  [{ctx.env}] {op.name}: setup failed ({exc}); skipping")
+                ctx.log.error(f"  [{ctx.env}] {op.name}: setup failed ({exc}); skipping")
                 continue
         # most ops run `repeat` times; pool-derived ops (the relationship chain)
         # run as many times as their inputs allow — 0 means inputs aren't there yet.
         count = op.iterations(ctx, repeat) if op.iterations else repeat
         if count == 0:
-            log.warning(f"  [{ctx.env}] {op.name}: no work (needs the upload pool — "
-                        "run create_resource first, with repeat ≥ 2); skipping")
+            ctx.log.warning(f"  [{ctx.env}] {op.name}: no work (needs the upload pool — "
+                            "run create_resource first, with repeat ≥ 2); skipping")
             continue
         for i in range(1, count + 1):
             started_at = datetime.now(timezone.utc).isoformat()
@@ -90,5 +88,5 @@ def measure(
             samples.append(s)
             if on_sample:
                 on_sample(s)  # flush immediately — survive a later hang/crash
-            log.info(f"  [{ctx.env}] {op.name} {i}/{count}  {duration:7.3f}s  {status}")
+            ctx.log.info(f"  [{ctx.env}] {op.name} {i}/{count}  {duration:7.3f}s  {status}")
     return samples

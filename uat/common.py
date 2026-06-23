@@ -101,7 +101,7 @@ class TestContext:
     run_id: str
     env: str
     no_cleanup: bool
-    _log: logging.Logger = field(repr=False)
+    log: logging.Logger = field(repr=False)
 
     platform: Any = field(default=None, repr=False)   # IstariPlatform
     client: Any = field(default=None, repr=False)     # raw v2 Client
@@ -140,7 +140,7 @@ class TestContext:
         PASS/FAIL, and binds the decorated name to the return value (None on
         failure). See module docstring."""
         def decorator(fn: Callable) -> Any:
-            self._log.info(f"  [{self._current_suite}] {description}")
+            self.log.info(f"  [{self._current_suite}] {description}")
             t0 = time.perf_counter()
             try:
                 result = fn()
@@ -153,15 +153,15 @@ class TestContext:
             duration = time.perf_counter() - t0
             self._record(description, status, msg, duration_s=duration)
             if status is Status.PASS:
-                self._log.debug(f"    PASS  ({duration:.3f}s)")
+                self.log.debug(f"    PASS  ({duration:.3f}s)")
             else:
-                self._log.error(f"    FAIL  {msg}")
+                self.log.error(f"    FAIL  {msg}")
             return result
         return decorator
 
     def skip(self, description: str, reason: str = "") -> None:
         self._record(description, Status.SKIP, reason)
-        self._log.warning(f"  [{self._current_suite}] SKIP  {description}" + (f" — {reason}" if reason else ""))
+        self.log.warning(f"  [{self._current_suite}] SKIP  {description}" + (f" — {reason}" if reason else ""))
 
     def data(self, filename: str) -> Path:
         return _UAT_ROOT / "data" / filename
@@ -170,9 +170,9 @@ class TestContext:
 
     def cleanup(self) -> None:
         if self.no_cleanup:
-            self._log.info("--no-cleanup: skipping resource teardown")
+            self.log.info("--no-cleanup: skipping resource teardown")
             return
-        self._log.info("Cleaning up tracked resources …")
+        self.log.info("Cleaning up tracked resources …")
         order = [
             "job", "v3_comment", "artifact", "model", "file",
             "document", "configuration", "system", "v3_resource",
@@ -190,14 +190,14 @@ class TestContext:
         else:
             method = getattr(self.client, f"archive_{entity_type}", None)
             if method is None:
-                self._log.warning(f"  no archiver for tracked type {entity_type!r} ({rid}) — leaked")
+                self.log.warning(f"  no archiver for tracked type {entity_type!r} ({rid}) — leaked")
                 return
             archive = lambda: method(rid)
         try:
             archive()
-            self._log.debug(f"  archived {entity_type} {rid}")
+            self.log.debug(f"  archived {entity_type} {rid}")
         except Exception as exc:
-            self._log.warning(f"  cleanup failed for {entity_type} {rid}: {exc}")
+            self.log.warning(f"  cleanup failed for {entity_type} {rid}: {exc}")
 
     # ── results ──────────────────────────────────────────────────────────
 
@@ -268,9 +268,9 @@ def _measure_counts(ctx: TestContext, per_call_timeout_s: float) -> PlatformCoun
         t.join(max(0.0, deadline - time.monotonic()))
         box = boxes[field]
         if t.is_alive():
-            ctx._log.warning(f"baseline: {field} exceeded {per_call_timeout_s:.0f}s; recording -1")
+            ctx.log.warning(f"baseline: {field} exceeded {per_call_timeout_s:.0f}s; recording -1")
         elif box["exc"] is not None:
-            ctx._log.warning(f"baseline: could not count {field}: {box['exc']}")
+            ctx.log.warning(f"baseline: could not count {field}: {box['exc']}")
         else:
             counts[field] = box["value"]
     return PlatformCounts(taken_at=datetime.now(timezone.utc).isoformat(), env=ctx.env, **counts)
@@ -283,7 +283,7 @@ def take_baseline(ctx: TestContext, per_call_timeout_s: float = 90.0) -> Platfor
     """
     ctx.baseline = _measure_counts(ctx, per_call_timeout_s)
     counts = " ".join(f"{k}={v}" for k, v in asdict(ctx.baseline).items() if k not in ("taken_at", "env"))
-    ctx._log.info(f"Baseline: {counts}")
+    ctx.log.info(f"Baseline: {counts}")
     return ctx.baseline
 
 
@@ -309,7 +309,7 @@ def recheck_baseline(ctx: TestContext, per_call_timeout_s: float = 90.0) -> list
 
     added = sum(len(v) for v in ctx._tracked.values())
     if added:
-        ctx._log.warning(
+        ctx.log.warning(
             f"This run added {added} resource(s) to the {ctx.env} footprint; archive is a soft-delete "
             "so they persist and keep costing on every scan — repeated runs degrade the env."
         )
@@ -391,6 +391,6 @@ def build_context(env: str, no_cleanup: bool, run_id: str, log: logging.Logger) 
     platform = IstariPlatform.from_env(str(env_file))
     v3 = V3Client(Configuration(registry_url=url, registry_auth_token=token))
     return TestContext(
-        run_id=run_id, env=env, no_cleanup=no_cleanup, _log=log,
+        run_id=run_id, env=env, no_cleanup=no_cleanup, log=log,
         platform=platform, client=platform.client, v3=v3,
     )

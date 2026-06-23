@@ -32,7 +32,7 @@ class Sample:
     duration_s: float
     status: str            # "ok" | "error"
     error: str = ""
-    upload_mb: float | None = None    # payload size for this run's uploads (None = dummy.txt)
+    upload_mb: float | None = None    # payload size in MB (None = older rows without the field)
     resource_id: str | None = None    # created model/file/resource id — for server-log correlation
     revision_id: str | None = None    # created file-revision id
 

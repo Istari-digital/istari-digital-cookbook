@@ -107,10 +107,11 @@ python -m uat.perf --make-junk 100                          # writes uat/data/ju
 python -m uat.perf --env perf --ops add_model --repeat 20 --upload-mb 100
 ```
 
-**Junk payloads.** `--make-junk MB` writes `uat/data/junk_{MB}mb.bin` (random bytes,
-gitignored) and exits. `--upload-mb MB` makes the upload ops (`add_model`, `add_file`,
-`create_resource`) send a junk file of that size instead of `dummy.txt` (auto-generated,
-cached by size). Caveat: uploading the *same* file repeatedly may hit the platform's
+**Junk payloads.** Upload ops (`add_model`, `add_file`, `create_resource`) send an
+auto-generated junk file, **10 MB by default** (`--upload-mb MB` to change; `--upload-mb 0`
+falls back to the tiny `dummy.txt` and reports no throughput). `--make-junk MB` just writes
+`uat/data/junk_{MB}mb.bin` (random bytes, gitignored) and exits. Files are cached by size.
+Caveat: uploading the *same* file repeatedly may hit the platform's
 content dedup (we've seen token-SHA conflicts), so identical repeated uploads can measure
 dedup rather than full transfer — flag if you need true per-upload transfer numbers.
 

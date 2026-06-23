@@ -56,8 +56,9 @@ def main() -> None:
     parser.add_argument("--no-cleanup", action="store_true", help="skip archiving resources created during the run")
     parser.add_argument("--make-junk", type=int, metavar="MB",
                         help="generate a random MB-sized junk file (uat/data/junk_{MB}mb.bin) and exit")
-    parser.add_argument("--upload-mb", type=int, metavar="MB",
-                        help="upload ops send a junk file of this size (auto-generated) instead of dummy.txt")
+    parser.add_argument("--upload-mb", type=int, default=10, metavar="MB",
+                        help="upload ops send an auto-generated junk file of this size "
+                             "(default 10; 0 = an empty 0-byte file)")
     parser.add_argument("--call-timeout", type=float, default=300.0, metavar="S",
                         help="abandon any single call after S seconds → 'timeout' sample (default: 300)")
     parser.add_argument("--no-network", action="store_true",
@@ -84,10 +85,9 @@ def main() -> None:
     ops = _resolve_ops(args.ops)
     log.info(f"Perf run {run_id}  envs={envs}  ops={[o.name for o in ops]}  repeat={args.repeat}")
 
-    upload_path = None
-    if args.upload_mb:
-        upload_path = make_junk_file(args.upload_mb)
-        log.info(f"Upload ops will send {args.upload_mb} MB junk file: {upload_path}")
+    # upload ops always send a sized junk file (default 10 MB; 0 = an empty file)
+    upload_path = make_junk_file(args.upload_mb)
+    log.info(f"Upload ops will send a {args.upload_mb} MB file: {upload_path}")
 
     # measure the uplink ONCE up front (before any uploads — never during, they'd contend);
     # on by default so every run is interpretable against the network, --no-network to skip
@@ -102,13 +102,12 @@ def main() -> None:
         except (FileNotFoundError, ValueError) as exc:
             log.error(f"[{env}] {exc}; skipping env")
             continue
-        if upload_path:
-            ctx.shared["upload_path"] = upload_path
-            ctx.shared["upload_mb"] = args.upload_mb  # stamped on each sample for size analysis
+        ctx.shared["upload_path"] = upload_path
+        ctx.shared["upload_mb"] = args.upload_mb  # stamped on each sample for size analysis
         if not args.no_baseline:
             store.write_baseline(run_id, take_baseline(ctx, args.baseline_timeout), extra=net)  # footprint + uplink, before
         # flush each sample as it lands (a hang/crash then loses only the in-flight call)
-        samples = measure(ctx, ops, args.repeat, log,
+        samples = measure(ctx, ops, args.repeat,
                           call_timeout_s=args.call_timeout,
                           on_sample=lambda s: store.write_samples([s]))
         if not args.no_baseline:

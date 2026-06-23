@@ -1,7 +1,5 @@
-"""
-runner.py — UAT entry point.
+"""UAT entry point.
 
-    cd istari-labs-helpers
     uv run uat --list
     uv run uat --env demo
     uv run uat --env demo --suite v2_models,v2_jobs
@@ -15,17 +13,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# When invoked as a script entry point the repo root isn't automatically on
-# sys.path; add it so the `uat` package (which lives there) is importable.
+# Put the repo root on sys.path so `uat` imports when run as a console script.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import argparse
-import importlib
-import inspect
 from datetime import datetime
 
+from uat import v2, v3
 from uat.common import (
     Status,
     TestContext,
@@ -36,58 +32,40 @@ from uat.common import (
     write_results,
 )
 
-# ---------------------------------------------------------------------------
-# Suites are auto-discovered: every public `(ctx)` function in uat/v2.py and uat/v3.py
-# is a suite, run in definition order (which mirrors the docs pages and satisfies the
-# cross-suite deps — each suite also skip-guards its own inputs, so order isn't fragile).
-# No registry to keep in sync: define a function, it runs.
-# ---------------------------------------------------------------------------
-
-def _discover(modname: str) -> list[str]:
-    """'module.function' for each public function defined in uat.<modname>, in def order.
-    (module __dict__ preserves definition order; imports/helpers/`_`-prefixed are skipped.)"""
-    mod = importlib.import_module(f"uat.{modname}")
-    return [f"{modname}.{name}" for name, obj in vars(mod).items()
-            if inspect.isfunction(obj) and not name.startswith("_") and obj.__module__ == mod.__name__]
+# The suites to run, in order. The order satisfies cross-suite deps (e.g. models before
+# artifacts); each suite also skip-guards its own inputs, so it's forgiving. Add a function
+# to v2.py / v3.py and list it here to run it.
+SUITES = (
+    v2.files, v2.models, v2.artifacts, v2.revisions, v2.jobs, v2.systems, v2.snapshots,
+    v2.access, v2.control_tags, v2.documents, v2.agents, v2.tools, v2.users,
+    v3.resources, v3.revisions, v3.comments, v3.relationships, v3.remotes,
+)
 
 
-def _all_suites() -> list[str]:
-    return _discover("v2") + _discover("v3")
+def _name(fn) -> str:
+    """v2.files → 'v2_files'."""
+    return f"{fn.__module__.rsplit('.', 1)[-1]}_{fn.__name__}"
 
 
-def _resolve_suites(spec: str | None) -> list[str]:
-    suites = _all_suites()
+def _select(spec: str | None) -> tuple:
     if not spec:
-        return suites
-    by_name = {s.replace(".", "_"): s for s in suites}
-    by_name.update({s: s for s in suites})  # also accept dotted names
-    resolved: list[str] = []
-    for name in (s.strip() for s in spec.split(",") if s.strip()):
-        if name not in by_name:
-            print(f"Unknown suite: {name!r}. Run --list to see available suites.", file=sys.stderr)
-            sys.exit(1)
-        if by_name[name] not in resolved:
-            resolved.append(by_name[name])
-    return resolved
+        return SUITES
+    wanted = {s.strip() for s in spec.split(",") if s.strip()}
+    unknown = wanted - {_name(fn) for fn in SUITES}
+    if unknown:
+        print(f"Unknown suite(s): {', '.join(sorted(unknown))}. Run --list.", file=sys.stderr)
+        sys.exit(1)
+    return tuple(fn for fn in SUITES if _name(fn) in wanted)
 
 
-def _run_suite(spec: str, ctx: TestContext) -> None:
-    modname, fnname = spec.split(".")
-    short = f"{modname}_{fnname}"
-    ctx._current_suite = short
-    ctx._log.info(f"\n{'─' * 60}")
-    ctx._log.info(f"  Suite: {short}")
-    ctx._log.info(f"{'─' * 60}")
+def _run(fn, ctx: TestContext) -> None:
+    ctx._current_suite = _name(fn)
+    ctx.log.info(f"\n{'─' * 60}\n  Suite: {_name(fn)}\n{'─' * 60}")
     try:
-        fn = getattr(importlib.import_module(f"uat.{modname}"), fnname)
         fn(ctx)
     except Exception as exc:
-        ctx._log.error(f"Suite {short} crashed: {exc}")
+        ctx.log.error(f"Suite {_name(fn)} crashed: {exc}")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -101,13 +79,12 @@ def main() -> None:
                         help="comma-separated suites to run; default all")
     parser.add_argument("--no-cleanup", action="store_true",
                         help="skip archiving resources created during the run")
-    parser.add_argument("--list", action="store_true", help="print available suite names and exit")
+    parser.add_argument("--list", action="store_true", help="print suite names and exit")
     args = parser.parse_args()
 
     if args.list:
-        print("Available suites (pass short name to --suite):")
-        for s in _all_suites():
-            print(f"  {s.replace('.', '_'):<28}  (uat/{s.split('.')[0]}.py)")
+        for fn in SUITES:
+            print(_name(fn))
         return
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -120,19 +97,17 @@ def main() -> None:
         log.error(str(exc))
         sys.exit(1)
 
-    take_baseline(ctx)  # always — every run records the footprint (before + recheck after)
+    take_baseline(ctx)  # footprint before the run
 
-    suites = _resolve_suites(args.suite)
-    log.info(f"Running {len(suites)} suite(s): {', '.join(s.replace('.', '_') for s in suites)}")
-
-    for suite in suites:
-        _run_suite(suite, ctx)
+    suites = _select(args.suite)
+    log.info(f"Running {len(suites)} suite(s): {', '.join(_name(fn) for fn in suites)}")
+    for fn in suites:
+        _run(fn, ctx)
 
     ctx.cleanup()
+    recheck_baseline(ctx)  # footprint after → ctx.drift + footprint-growth warning
 
-    recheck_baseline(ctx)  # re-measure footprint; records ctx.drift + logs footprint growth
-
-    results_path = write_results(ctx, [s.replace(".", "_") for s in suites])
+    results_path = write_results(ctx, [_name(fn) for fn in suites])
 
     summary = ctx.summary()
     log.info(f"\n{'═' * 60}")

@@ -1,9 +1,8 @@
 # UAT + Perf — branch `gio/uat` handoff
 
 Context for reviewing the work on this branch. Everything below lives under `uat/`
-plus three small files in `istari-labs-helpers/`. Committed through `cc25170`; the
-perf two-phase + v3 relationship changes are staged in the working tree. **Nothing is
-pushed** (the user always pushes).
+plus three small files in `istari-labs-helpers/`. Uncommitted on branch `gio/uat`;
+**nothing is pushed** (the user always pushes).
 
 ## What this branch adds
 
@@ -16,10 +15,8 @@ pushed** (the user always pushes).
    docs site, re-checked when adding suites (last verified 2026-06-10): v2 = sections of
    [api_reference/client](https://docs.istaridigital.com/developers/SDK/api_reference/client/),
    v3 = sections of [v3/v3-client](https://docs.istaridigital.com/developers/SDK/v3/v3-client/).
-   That check added `v3_comments`/`v3_remotes` suites (now documented) and deleted
-   `v2_change_requests` (absent from docs and SDK). Suites are **auto-discovered** — every
-   public `(ctx)` function in `v2.py`/`v3.py` runs, in definition order; no registry to
-   maintain. Remaining documented-but-unsuited gaps
+   Each suite is a `(ctx)` function in `v2.py`/`v3.py`; `runner.py`'s `SUITES` tuple lists
+   them in run order. Documented-but-unsuited gaps
    are listed in `uat/README.md` (v2 infosec levels, v3 workflow logs, v3 archive/restore
    as steps, v3 remote create/update).
 2. **Baselining** (always on, no flag) — every UAT run measures platform entity-count
@@ -41,14 +38,15 @@ pushed** (the user always pushes).
    hook (rep count from run state); `measure()` honors both.
 
    **Heavy uploads:** `--make-junk MB` writes `uat/data/junk_{MB}mb.bin` (random bytes,
-   gitignored) and exits; `--upload-mb MB` makes the upload ops send that file instead of
-   `dummy.txt`. Dedup caveat — identical repeated uploads may measure storage dedup, not
+   gitignored) and exits; `--upload-mb MB` sets the upload payload size (**default 10**;
+   `--upload-mb 0` uses the tiny `dummy.txt` and reports no throughput). Dedup caveat —
+   identical repeated uploads may measure storage dedup, not
    full transfer (token-SHA conflicts seen); salt per upload for true transfer numbers.
 4. **Visualization** (`uat/visualize.py`) — reads a run JSON + the perf JSONL and writes
    one self-contained HTML report (plotly via CDN): step latency (FAIL = red ✕), entity
    counts (`-1`/uncountable plotted below the axis), perf latency series with error
    overlay. `python -m uat.visualize [--run ID --env E --open]`. Needs `experiment` extras.
-   (Was a notebook; switched to a plain `.py` — Helix has no LSP in `.ipynb` cells.)
+   Plain `.py`, not a notebook (Helix has no LSP in `.ipynb` cells).
 
 ## The one domain insight that drives the design
 
@@ -59,23 +57,21 @@ So:
   permanently grows it.
 - That growth is what degrades list/permission latency over time (Jira CPD-598/601,
   the SpiceDB scaling issue — see `memory/project_list_resources_500.md`).
-- Baseline counts originally used `archive_status="all"` to count archived rows too —
-  **but that was reversed 2026-06-22**: passing `archive_status` (even `active`) forces a
-  slow query path that *times out* on a populated env, while the default path returns
-  (verified on perf: default `list_models`=1019 where `archive_status` all/active both
-  timed out). So `_measure_counts` now passes **no** `archive_status` (default scope =
-  active; on `--no-cleanup` benchmarking nothing is archived, so active == all). Counts
-  also run in **parallel** against one deadline (90s for `uat.runner`; `uat.perf` raises it
-  via `--baseline-timeout`, default 180s), so the baseline waits once, not ×7.
+- Baseline counts pass **no** `archive_status`: passing it (even `active`) forces a slow
+  query path that times out on a populated env, while the default path returns (default
+  `list_models` gave 1019 where `archive_status` all/active both timed out). Default scope
+  is active; on `--no-cleanup` benchmarking nothing is archived, so active == all. Counts
+  run in **parallel** against one deadline (90s for `uat.runner`; `uat.perf`'s
+  `--baseline-timeout`, default 180s), so the baseline waits once, not ×7.
   `models`/`systems`/`documents`/`jobs` return; `files`/`artifacts`/`v3_resources` still hit
-  the CPD-598 500 and record `-1`. Note: even 180s isn't always enough on a hammered perf —
-  `models` (~1019 rows) bounces around the deadline and a concurrent run pushes it to 500s.
+  the CPD-598 500 and record `-1`. Even 180s isn't always enough on a hammered perf —
+  `models` (~1019 rows) bounces around the deadline, and a concurrent run pushes it to 500s.
 - And `recheck_baseline` expects `final == baseline + resources_created` (cleanup
   does not reduce the count), warning on any other drift.
 
-**Observed degradation (verified this session):** repeated runs visibly degraded
-`perf` — a clean ~23s UAT run early in the day became ~6 min, then ~21 min; a
-10×upload perf run had each upload at 16–33s. This is the environment, not the code.
+**Observed degradation:** repeated runs visibly degrade `perf` — a clean ~23s UAT run
+became ~6 min, then ~21 min; 10 MB uploads run 16–33s and climb with footprint. This is
+the environment, not the code.
 There is **no hard-delete in the SDK surface** seen, so the only way to keep an env
 clean for benchmarking is a disposable/reset tenant.
 
@@ -85,7 +81,7 @@ clean for benchmarking is a disposable/reset tenant.
 uat/
   common.py        TestContext, @ctx.step, baseline (take_baseline/recheck_baseline),
                    cleanup (_archive_one dispatch), write_results, build_context
-  runner.py        UAT CLI: suite auto-discovery, always-on baseline, end summary (failures + drift)
+  runner.py        UAT CLI: SUITES list, always-on baseline, end summary (failures + drift)
   v2.py v3.py      correctness suites, one function per docs topic
                    (intentionally repetitive = example code)
   visualize.py     run JSON + perf JSONL → one self-contained HTML report (plotly/CDN)
@@ -119,8 +115,8 @@ themselves are **not built** — JSONL is the handoff point (plotly/pandas are i
 v3 parent/child is the `produces` revision relationship (inverse `produced_by`), model
 revision → artifact revision; left = source/parent, right = derived/child. **Both the v3
 correctness suite and the perf chain select it by name** (`produces`, fallback to the
-first type), never `items[0]` blindly, and link two *distinct* resources — the old code
-linked two revisions of the same resource (self-parent), now fixed.
+first type), never `items[0]` blindly, and link two *distinct* resources (never two
+revisions of the same resource — that would make a resource its own parent).
 
 Caveat: the SDK source docstrings document `produces` + left/right semantics explicitly
 (generated from the OpenAPI contract), but the **rendered docs site does not** — it only
@@ -181,7 +177,7 @@ count reduced). The suite files stay deliberately repetitive (copy-paste example
 
 Each upload now carries the context needed to split its latency between the uplink and the
 platform, and `visualize`'s per-run table surfaces it:
-- **`upload_mb` per sample** — payload size (`--upload-mb`, else dummy.txt). Effective
+- **`upload_mb` per sample** — payload size (`--upload-mb`, default 10). Effective
   throughput = payload ÷ median latency.
 - **`resource_id` / `revision_id` per sample** — the created id, for server-log correlation
   (shown in the latency-chart hover).
@@ -192,12 +188,12 @@ platform, and `visualize`'s per-run table surfaces it:
   network.
 
 **Gotcha (encoded):** the network test saturates the link, so it runs once *before* uploads,
-never during — the runner enforces this. Two robustness guards also live in `measure.py`
-now: per-call timeout (`--call-timeout`, default 300s → a hung socket becomes a `timeout`
-sample, not a 4-day stall) and incremental `on_sample` flush (a crash loses only the
-in-flight call). Both were added after a run hung 4 days and lost everything.
+never during — the runner enforces this. Two robustness guards live in `measure.py`:
+per-call timeout (`--call-timeout`, default 300s → a hung socket becomes a `timeout`
+sample instead of stalling the run indefinitely) and incremental `on_sample` flush (each
+sample is written as it completes, so a crash/hang loses only the in-flight call).
 
-## Upload paths — what's measurable where (researched 2026-06-22)
+## Upload paths — what's measurable where
 
 Three ways to get bytes in; only the presigned ones work on perf:
 - **Presigned single PUT** (default) — what every perf run here measures. The ~28s/10 MB on

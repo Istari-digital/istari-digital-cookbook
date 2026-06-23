@@ -73,8 +73,9 @@ def make_junk_file(size_mb: int, path: Path | None = None) -> Path:
 
 
 def _upload_src(ctx: TestContext) -> Path:
-    """What the upload ops send: the --upload-mb junk file if set, else dummy.txt."""
-    return ctx.shared.get(_UPLOAD_PATH) or ctx.data("dummy.txt")
+    """The sized junk file the upload ops send — set by the runner from --upload-mb
+    (default 10 MB; 0 = an empty file). Falls back to a 10 MB file if unset."""
+    return ctx.shared.get(_UPLOAD_PATH) or make_junk_file(10)
 
 
 def measure_network() -> dict:

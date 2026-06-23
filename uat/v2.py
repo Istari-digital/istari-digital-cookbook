@@ -194,7 +194,7 @@ def jobs(ctx: TestContext) -> None:
     # name filter avoids paginating every function just to find @istari:extract
     extract_page = ctx.client.list_functions(name="@istari:extract", size=1)
     if not (extract_page and getattr(extract_page, "items", None)):
-        ctx._log.warning(
+        ctx.log.warning(
             "⚠️  @istari:extract / open_spreadsheet not found on this environment — "
             "job endpoint tests are SKIPPED until the module is installed."
         )
