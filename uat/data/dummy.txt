@@ -1,0 +1,1 @@
+UAT test file — upload fixture for Istari Digital SDK tests.
