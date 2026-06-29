@@ -1,0 +1,121 @@
+[
+  {
+    "name": "SA ISTARI_ONE\\ICD_UAV450.2\\GROUND_CLEARANCE",
+    "type": "double",
+    "part_name": "ICD_UAV450",
+    "value": 400,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\FUSELAGE\\FUSELAGE_LENGTH",
+    "type": "double",
+    "part_name": "FUSELAGE_BODY",
+    "value": 2725,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\FUSELAGE\\FUSELAGE_RADIUS",
+    "type": "double",
+    "part_name": "FUSELAGE_BODY",
+    "value": 100,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\WING.2\\DIHEDRAL_ANGLE",
+    "type": "double",
+    "part_name": "WING",
+    "value": 1.146,
+    "unit": "deg"
+  },
+  {
+    "name": "SA ISTARI_ONE\\WING.2\\WING_LENGTH",
+    "type": "double",
+    "part_name": "WING",
+    "value": 1800,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA_VERTICAL_STABILIZER\\SA VERT STABILIZER\\VERT STABILIZER\\Stabilizer_Length",
+    "type": "double",
+    "part_name": "VERT STABILIZER",
+    "value": 360,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA_VERTICAL_STABILIZER\\SA VERT STABILIZER\\VERT STABILIZER\\Stabilizer_Height",
+    "type": "double",
+    "part_name": "VERT STABILIZER",
+    "value": 400,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA_VERTICAL_STABILIZER\\SA VERT STABILIZER\\VERT STABILIZER\\RUDDER_HEIGHT",
+    "type": "double",
+    "part_name": "VERT STABILIZER",
+    "value": 250,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA LEFT STABILIZER.1\\LEFT STABILIZER\\Stabilizer_Length",
+    "type": "double",
+    "part_name": "LEFT STABILIZER",
+    "value": 360,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA LEFT STABILIZER.1\\LEFT STABILIZER\\Stabilizer_Height",
+    "type": "double",
+    "part_name": "LEFT STABILIZER",
+    "value": 400,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA LEFT STABILIZER.1\\LEFT STABILIZER\\RUDDER_HEIGHT",
+    "type": "double",
+    "part_name": "LEFT STABILIZER",
+    "value": 250,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA RIGHT STABILIZER.1\\RIGHT STABILIZER\\Stabilizer_Length",
+    "type": "double",
+    "part_name": "RIGHT STABILIZER",
+    "value": 360,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA RIGHT STABILIZER.1\\RIGHT STABILIZER\\Stabilizer_Height",
+    "type": "double",
+    "part_name": "RIGHT STABILIZER",
+    "value": 400,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\SA RIGHT STABILIZER.1\\RIGHT STABILIZER\\RUDDER_HEIGHT",
+    "type": "double",
+    "part_name": "RIGHT STABILIZER",
+    "value": 250,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\LEFT ELEVATOR.1\\RUDDER_CLEARANCE",
+    "type": "double",
+    "part_name": "LEFT ELEVATOR",
+    "value": 1.5,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\RIGHT ELEVATOR.1\\RUDDER_CLEARANCE",
+    "type": "double",
+    "part_name": "RIGHT ELEVATOR",
+    "value": 1.5,
+    "unit": "mm"
+  },
+  {
+    "name": "SA ISTARI_ONE\\RUDDER.1\\RUDDER_CLEARANCE",
+    "type": "double",
+    "part_name": "RUDDER",
+    "value": 1.5,
+    "unit": "mm"
+  }
+]

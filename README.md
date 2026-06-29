@@ -46,6 +46,46 @@ Each notebook is self-contained and explains its own setup in the first cell —
 - A **Personal Access Token**. See [Personal Access Tokens](https://docs.istaridigital.com/users/user-guide/settings#developer-settings--personal-access-tokens).
 - A [supported Python version](https://pypi.org/project/istari-digital-client/) (see the classifiers on the `istari-digital-client` PyPI page), and [uv](https://docs.astral.sh/uv/) (recommended) or `pip` for installing dependencies.
 
+From the cookbook root, install notebook dependencies (most recipes):
+
+```bash
+uv sync --group dev
+```
+
+Workflow-logs recipes also need `--group advanced`. See each notebook’s prerequisites cell for the exact command.
+
+Match the installed **`istari-digital-client`** version to your Istari Digital Platform release — see [Python client version](#python-client-version) below.
+
+## Python client version
+
+Cookbook notebooks depend on **`istari-digital-client`** from the root [`pyproject.toml`](pyproject.toml) (`dev` dependency group). The pinned version should match the Python SDK shipped with your Istari Digital Platform release.
+
+### Which version to use
+
+Open the release notes for your Istari Digital Platform version in the [Istari Digital documentation](https://docs.istaridigital.com) (**Releases** in the sidebar — for example [2026.05.01](https://docs.istaridigital.com/releases/2026-05-01-Release) or [2026.04.01](https://docs.istaridigital.com/2026.04/releases/2026-04-01-Release)). Under **Assets → SDK Clients**, note the **Python** version — that is the `istari-digital-client` release to install.
+
+At runtime, `Client.check_compatibility()` reports the registry’s expected client version as `server_version`; your installed package should match it before you call version-sensitive APIs.
+
+### Update the pin for notebooks
+
+From the cookbook root:
+
+1. Edit the pin in [`pyproject.toml`](pyproject.toml) (`dependency-groups.dev`, key `istari-digital-client`), or run:
+
+   ```bash
+   uv add --group dev "istari-digital-client==<version-from-release-notes>"
+   ```
+
+2. Refresh the environment:
+
+   ```bash
+   uv sync --group dev
+   ```
+
+3. **Restart the Jupyter kernel** so notebooks pick up the new package.
+
+If you use `istari_labs_helpers` via `uv sync --project istari-labs-helpers --extra experiment`, run a cookbook-root `uv sync --group dev` first (or reinstall the client explicitly) so the helper venv gets the same `istari-digital-client` version.
+
 ## Repository layout
 
 ```
