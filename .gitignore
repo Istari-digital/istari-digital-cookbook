@@ -181,3 +181,4 @@ cython_debug/
 
 # JetBrains IDE settings
 .idea/
+samples/.DS_Store
