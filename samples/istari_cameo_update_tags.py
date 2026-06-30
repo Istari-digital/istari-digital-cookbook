@@ -233,12 +233,13 @@ def build_parameters(args, updates: list[dict]) -> dict:
     return params
 
 
-def submit_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str):
-    print(f"Submitting @istari:update_tags  tool_version={tool_version}  os={operating_system}")
+def submit_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str, twc_mode: bool = False):
+    function = "@istari:twc_update_tags" if twc_mode else "@istari:update_tags"
+    print(f"Submitting {function}  tool_version={tool_version}  os={operating_system}")
     print(f"  Targeting {len(parameters['updates'])} element update(s)")
     job = client.add_job(
         model_id=model_id,
-        function="@istari:update_tags",
+        function=function,
         tool_name="dassault_cameo",
         tool_version=tool_version,
         operating_system=operating_system,
@@ -299,7 +300,7 @@ def main():
         model_id = resolve_model_local(client, args)
 
     parameters = build_parameters(args, updates)
-    job = submit_job(client, model_id, parameters, args.tool_version, args.os)
+    job = submit_job(client, model_id, parameters, args.tool_version, args.os, twc_mode=args.twc)
     completed_job = wait_for_job(client, job.id, args.poll_interval, args.timeout)
     print_job_result(completed_job)
 
