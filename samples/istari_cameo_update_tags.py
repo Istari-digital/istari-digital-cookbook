@@ -1,42 +1,49 @@
 """
-Upload a Cameo (.mdzip) file to the Istari Digital Platform and run @istari:update_tags
-to write tags onto model elements in a Teamwork Cloud project.
+Run @istari:update_tags on a Cameo model to write tags onto model elements.
 
-Elements can be targeted by element_id, element_name, or both.
-Tags are arbitrary key/value pairs; set a value to null to clear a tag.
+Two mutually exclusive modes:
+
+  LOCAL MODE  — upload a local .mdzip file, then run the job against it.
+  TWC MODE    — the agent fetches the model directly from Teamwork Cloud;
+                no local file is needed. Requires an existing Istari model
+                record to attach the job to (--model-id).
 
 Configuration via environment variables or CLI flags:
   ISTARI_REGISTRY_URL        - Platform URL (e.g. https://your-instance.istari.digital)
   ISTARI_REGISTRY_AUTH_TOKEN - Personal access token
 
-  TWC_USERNAME               - Teamwork Cloud username
-  TWC_PASSWORD               - Teamwork Cloud password
-  TWC_URL                    - Teamwork Cloud server URL (e.g. https://twc.example.com)
+  TWC_USERNAME               - Teamwork Cloud username        (TWC mode)
+  TWC_PASSWORD               - Teamwork Cloud password        (TWC mode)
+  TWC_PROJECT_URL            - URL to the TWC project/branch  (TWC mode)
 
-Usage:
-  python istari_cameo_update_tags.py <path_to_model.mdzip> --tags-file tags.json [options]
-  python istari_cameo_update_tags.py <path_to_model.mdzip> --element-id ID --tag KEY=VALUE [options]
-  python istari_cameo_update_tags.py <path_to_model.mdzip> --element-name NAME --tag KEY=VALUE [options]
+Usage — local file:
+  python istari_cameo_update_tags.py --local /path/to/model.mdzip \\
+      --tags-file tags.json
+
+  python istari_cameo_update_tags.py --local /path/to/model.mdzip \\
+      --element-id "_abc123" --tag "Risk=High" --tag "Status=Reviewed"
+
+Usage — Teamwork Cloud:
+  python istari_cameo_update_tags.py --twc \\
+      --model-id <istari-model-id> \\
+      --twc-project-url "https://twc.example.com/.../<project>" \\
+      --twc-username myuser --twc-password mypass \\
+      --tags-file tags.json
 
 Tag file format (JSON array):
   [
     {
       "element_id": "_2021x_abc123",
       "replace_existing": true,
-      "tags": {
-        "Risk": "High",
-        "Status": "Reviewed",
-        "Logs": null
-      }
+      "tags": { "Risk": "High", "Status": "Reviewed", "Logs": null }
     },
     {
       "element_name": "Requirement Brake Deployment",
-      "tags": {
-        "Requirement Verification Pass or Fail": "PASSED",
-        "Version History": "v1.3.4"
-      }
+      "tags": { "Requirement Verification Pass or Fail": "PASSED" }
     }
   ]
+
+Set a tag value to null (in JSON file) or use KEY= (CLI) to clear a tag.
 """
 
 import argparse
@@ -53,81 +60,122 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Canceled"}
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Upload a Cameo .mdzip and run @istari:update_tags on the Istari Digital Platform"
+        description="Run @istari:update_tags on a Cameo model (local upload or Teamwork Cloud)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("model_path", help="Path to the .mdzip file to upload")
 
-    # Istari platform auth
-    parser.add_argument("--url", default=None, help="Istari registry URL (overrides ISTARI_REGISTRY_URL)")
-    parser.add_argument("--token", default=None, help="Istari auth token (overrides ISTARI_REGISTRY_AUTH_TOKEN)")
+    # --- Source mode (mutually exclusive) ---
+    source = parser.add_argument_group("Model source (choose one)")
+    mode = source.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--local",
+        metavar="FILE",
+        dest="local_path",
+        help="Path to a local .mdzip file to upload",
+    )
+    mode.add_argument(
+        "--twc",
+        action="store_true",
+        help="Model lives in Teamwork Cloud — no local file upload",
+    )
 
-    # TWC credentials
-    parser.add_argument("--twc-url", default=None, help="Teamwork Cloud server URL (overrides TWC_URL)")
-    parser.add_argument("--twc-username", default=None, help="TWC username (overrides TWC_USERNAME)")
-    parser.add_argument("--twc-password", default=None, help="TWC password (overrides TWC_PASSWORD)")
+    # --- TWC options (only relevant with --twc) ---
+    twc = parser.add_argument_group("Teamwork Cloud options (--twc mode)")
+    twc.add_argument(
+        "--model-id",
+        metavar="ID",
+        help="Existing Istari model ID to attach the job to (required for --twc)",
+    )
+    twc.add_argument(
+        "--twc-project-url",
+        metavar="URL",
+        default=None,
+        help="URL of the TWC project/branch (overrides TWC_PROJECT_URL)",
+    )
+    twc.add_argument("--twc-username", metavar="USER", default=None, help="TWC username (overrides TWC_USERNAME)")
+    twc.add_argument("--twc-password", metavar="PASS", default=None, help="TWC password (overrides TWC_PASSWORD)")
 
-    # Tag specification — file or inline
-    tag_group = parser.add_mutually_exclusive_group(required=True)
-    tag_group.add_argument(
+    # --- Istari platform auth ---
+    auth = parser.add_argument_group("Istari platform auth")
+    auth.add_argument("--url", default=None, help="Istari registry URL (overrides ISTARI_REGISTRY_URL)")
+    auth.add_argument("--token", default=None, help="Istari auth token (overrides ISTARI_REGISTRY_AUTH_TOKEN)")
+
+    # --- Tag specification ---
+    tags = parser.add_argument_group("Tag specification (choose one)")
+    tag_src = tags.add_mutually_exclusive_group(required=True)
+    tag_src.add_argument(
         "--tags-file",
         metavar="FILE",
-        help="JSON file containing the updates array (see module docstring for format)",
+        help="JSON file containing the updates array",
     )
-    tag_group.add_argument(
+    tag_src.add_argument(
         "--element-id",
         metavar="ID",
         help="Single element ID to tag (use with --tag)",
     )
-    tag_group.add_argument(
+    tag_src.add_argument(
         "--element-name",
         metavar="NAME",
         help="Single element name to tag (use with --tag)",
     )
-
-    parser.add_argument(
+    tags.add_argument(
         "--tag",
         metavar="KEY=VALUE",
         action="append",
         dest="tags",
-        help="Tag to set as KEY=VALUE. Repeat for multiple tags. Use KEY= to clear a tag.",
+        help="Tag to set as KEY=VALUE. Repeat for multiple. Use KEY= to clear.",
     )
-    parser.add_argument(
+    tags.add_argument(
         "--replace-existing",
         action="store_true",
         default=False,
         help="Replace all existing tags on the element (default: merge/update only)",
     )
 
-    # Job execution
-    parser.add_argument("--tool-version", default="2024x-refresh2", help="Cameo tool version (default: 2024x-refresh2)")
-    parser.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
-    parser.add_argument("--poll-interval", type=int, default=10, help="Seconds between job status polls (default: 10)")
-    parser.add_argument("--timeout", type=int, default=3600, help="Max seconds to wait for job (default: 3600)")
+    # --- Job execution ---
+    job = parser.add_argument_group("Job execution")
+    job.add_argument("--tool-version", default="2024x-refresh2", help="Cameo version (default: 2024x-refresh2)")
+    job.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
+    job.add_argument("--poll-interval", type=int, default=10, help="Seconds between status polls (default: 10)")
+    job.add_argument("--timeout", type=int, default=3600, help="Max wait seconds (default: 3600)")
 
-    # Model metadata
-    parser.add_argument("--display-name", default=None, help="Human-readable name for the uploaded model")
-    parser.add_argument("--description", default=None, help="Description for the uploaded model")
+    # --- Local-upload metadata ---
+    meta = parser.add_argument_group("Model metadata (--local mode)")
+    meta.add_argument("--display-name", default=None, help="Human-readable name for the uploaded model")
+    meta.add_argument("--description", default=None, help="Description for the uploaded model")
 
     return parser.parse_args()
+
+
+def validate_args(args):
+    if args.twc:
+        if not args.model_id:
+            sys.exit("Error: --twc requires --model-id (the Istari model ID to attach the job to).")
+        twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
+        if not twc_url:
+            sys.exit("Error: --twc requires --twc-project-url or TWC_PROJECT_URL.")
+        twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
+        twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
+        if not twc_user or not twc_pass:
+            sys.exit("Error: --twc requires TWC credentials (--twc-username/--twc-password or TWC_USERNAME/TWC_PASSWORD).")
+    else:
+        if not os.path.isfile(args.local_path):
+            sys.exit(f"Error: file not found: {args.local_path}")
+        if not args.local_path.lower().endswith(".mdzip"):
+            print(f"Warning: expected a .mdzip file, got: {args.local_path}")
 
 
 def build_client(args) -> Client:
     registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL")
     registry_auth_token = args.token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN")
-
     if not registry_url:
         sys.exit("Error: registry URL not set. Use --url or set ISTARI_REGISTRY_URL.")
     if not registry_auth_token:
         sys.exit("Error: auth token not set. Use --token or set ISTARI_REGISTRY_AUTH_TOKEN.")
-
-    return Client(Configuration(
-        registry_url=registry_url,
-        registry_auth_token=registry_auth_token,
-    ))
+    return Client(Configuration(registry_url=registry_url, registry_auth_token=registry_auth_token))
 
 
 def build_updates(args) -> list[dict]:
-    """Build the updates array from either a JSON file or inline CLI flags."""
     if args.tags_file:
         with open(args.tags_file) as f:
             updates = json.load(f)
@@ -135,7 +183,6 @@ def build_updates(args) -> list[dict]:
             sys.exit("Error: --tags-file must contain a JSON array at the top level.")
         return updates
 
-    # Inline single-element update
     if not args.tags:
         sys.exit("Error: --element-id / --element-name requires at least one --tag KEY=VALUE.")
 
@@ -151,52 +198,43 @@ def build_updates(args) -> list[dict]:
         update["element_id"] = args.element_id
     else:
         update["element_name"] = args.element_name
-
     return [update]
 
 
+def resolve_model_local(client: Client, args) -> str:
+    """Upload a local .mdzip and return the new model ID."""
+    path = args.local_path
+    print(f"Uploading model: {path}")
+    model = client.add_model(
+        path=path,
+        display_name=args.display_name or os.path.basename(path),
+        description=args.description,
+    )
+    print(f"  Model uploaded  id={model.id}  name={model.display_name}")
+    return model.id
+
+
+def resolve_model_twc(args) -> str:
+    """Return the existing Istari model ID for a TWC-hosted model."""
+    print(f"Using existing Istari model  id={args.model_id}")
+    return args.model_id
+
+
 def build_parameters(args, updates: list[dict]) -> dict:
-    """Assemble the job parameters dict for @istari:update_tags."""
     params: dict = {"updates": updates}
 
-    # TWC credentials — required for Teamwork Cloud models
-    twc_url = args.twc_url or os.environ.get("TWC_URL")
-    twc_username = args.twc_username or os.environ.get("TWC_USERNAME")
-    twc_password = args.twc_password or os.environ.get("TWC_PASSWORD")
-
-    if twc_url:
+    if args.twc:
+        twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
+        twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
+        twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
         params["twc_link"] = twc_url
-    if twc_username and twc_password:
-        params["auth_info"] = {
-            "type": "basic",
-            "username": twc_username,
-            "password": twc_password,
-        }
-    elif twc_username or twc_password:
-        sys.exit("Error: both --twc-username and --twc-password are required together.")
+        params["auth_info"] = {"type": "basic", "username": twc_user, "password": twc_pass}
 
     return params
 
 
-def upload_model(client: Client, model_path: str, display_name: str | None, description: str | None):
-    print(f"Uploading model: {model_path}")
-    model = client.add_model(
-        path=model_path,
-        display_name=display_name or os.path.basename(model_path),
-        description=description,
-    )
-    print(f"  Model uploaded  id={model.id}  name={model.display_name}")
-    return model
-
-
-def submit_update_tags_job(
-    client: Client,
-    model_id: str,
-    parameters: dict,
-    tool_version: str,
-    operating_system: str,
-):
-    print(f"Submitting @istari:update_tags job  tool_version={tool_version}  os={operating_system}")
+def submit_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str):
+    print(f"Submitting @istari:update_tags  tool_version={tool_version}  os={operating_system}")
     print(f"  Targeting {len(parameters['updates'])} element update(s)")
     job = client.add_job(
         model_id=model_id,
@@ -214,27 +252,21 @@ def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
     print(f"Waiting for job {job_id} to complete (poll every {poll_interval}s, timeout {timeout}s)...")
     deadline = time.time() + timeout
     last_status = None
-
     while time.time() < deadline:
         job = client.get_job(job_id=job_id)
         current_status = job.status.status_name if job.status else "Unknown"
-
         if current_status != last_status:
             print(f"  Status: {current_status}")
             last_status = current_status
-
         if current_status in TERMINAL_STATUSES:
             return job
-
         time.sleep(poll_interval)
-
     sys.exit(f"Error: job {job_id} did not complete within {timeout} seconds.")
 
 
 def print_job_result(job):
     status = job.status.status_name if job.status else "Unknown"
     print(f"\nJob finished with status: {status}")
-
     if status == "Completed":
         print("Tags updated successfully.")
         if hasattr(job, "outputs") and job.outputs:
@@ -252,24 +284,22 @@ def print_job_result(job):
 
 def main():
     args = parse_args()
-
-    model_path = args.model_path
-    if not os.path.isfile(model_path):
-        sys.exit(f"Error: file not found: {model_path}")
-    if not model_path.lower().endswith(".mdzip"):
-        print(f"Warning: expected a .mdzip file, got: {model_path}")
+    validate_args(args)
 
     updates = build_updates(args)
-    parameters = build_parameters(args, updates)
-
     client = build_client(args)
 
     compat = client.check_compatibility()
     if compat:
         print(f"Connected to Istari platform  version={compat.server_version}")
 
-    model = upload_model(client, model_path, args.display_name, args.description)
-    job = submit_update_tags_job(client, model.id, parameters, args.tool_version, args.os)
+    if args.twc:
+        model_id = resolve_model_twc(args)
+    else:
+        model_id = resolve_model_local(client, args)
+
+    parameters = build_parameters(args, updates)
+    job = submit_job(client, model_id, parameters, args.tool_version, args.os)
     completed_job = wait_for_job(client, job.id, args.poll_interval, args.timeout)
     print_job_result(completed_job)
 
