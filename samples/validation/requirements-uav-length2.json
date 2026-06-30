@@ -1,0 +1,1048 @@
+[ {
+  "id" : "_2022x_2_5f80206_1692128294949_223694_19012",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Minimum Amount of Suplies",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Minimum Amount of Suplies",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The system shall be able to carry a minimum of X kg of supplies.",
+    "Id" : "1"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692128294949_223694_19012_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692128294949_223694_19012_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The system shall be able to carry a minimum of X kg of supplies.",
+  "req_id" : "1"
+}, {
+  "id" : "_2022x_2_5f80206_1692128393385_569459_19043",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Survivability of System",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Survivability of System",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The systems shall complete a resupply losgistic mission as enumerated in other requirements operating in a contested environment.",
+    "Id" : "2"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692128393385_569459_19043_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692128393385_569459_19043_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The systems shall complete a resupply losgistic mission as enumerated in other requirements operating in a contested environment.",
+  "req_id" : "2"
+}, {
+  "id" : "_2022x_2_5f80206_1692128494455_576849_19074",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Telemtry",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Telemtry",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The system shall provide real-time telemetry to the Operator.",
+    "Id" : "3"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692128494455_576849_19074_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692128494455_576849_19074_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The system shall provide real-time telemetry to the Operator.",
+  "req_id" : "3"
+}, {
+  "id" : "_2022x_2_5f80206_1692822213647_183273_17668",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement GCS Communication Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::GCS Communication Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Ground Control Station (GCS) shall enable effective communication with the UAV throughout all phases of flight operations.",
+    "Id" : "4"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822213647_183273_17668_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822213647_183273_17668_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Ground Control Station (GCS) shall enable effective communication with the UAV throughout all phases of flight operations.",
+  "req_id" : "4"
+}, {
+  "id" : "_2022x_2_5f80206_1692822238203_831868_17671",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement UAV Takeoff Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::UAV Takeoff Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The UAV shall have the capability to take off from a designated home base without causing any harm to property or personnel.",
+    "Id" : "5"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822238203_831868_17671_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822238203_831868_17671_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The UAV shall have the capability to take off from a designated home base without causing any harm to property or personnel.",
+  "req_id" : "5"
+}, {
+  "id" : "_2022x_2_5f80206_1692822241211_466486_17674",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Operator Control Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Operator Control Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Operator shall be able to monitor and control the UAV's flight path, altitude, speed, and heading during the ingress phase.",
+    "Id" : "6"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822241211_466486_17674_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822241211_466486_17674_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Operator shall be able to monitor and control the UAV's flight path, altitude, speed, and heading during the ingress phase.",
+  "req_id" : "6"
+}, {
+  "id" : "_2022x_2_5f80206_1692822243778_301862_17677",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Weather Monitoring Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Weather Monitoring Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Weather Monitoring System shall provide real-time weather data updates ensuring safe flying conditions.",
+    "Id" : "7"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822243778_301862_17677_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822243778_301862_17677_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Weather Monitoring System shall provide real-time weather data updates ensuring safe flying conditions.",
+  "req_id" : "7"
+}, {
+  "id" : "_2022x_2_5f80206_1692822246204_518723_17680",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Aircraft Navigation Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Aircraft Navigation Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Aircraft System shall automatically navigate along the preplanned ingress path under normal weather conditions, avoiding potential obstacles and restricted airspaces.",
+    "Id" : "8"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822246204_518723_17680_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822246204_518723_17680_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Aircraft System shall automatically navigate along the preplanned ingress path under normal weather conditions, avoiding potential obstacles and restricted airspaces.",
+  "req_id" : "8"
+}, {
+  "id" : "_2022x_2_5f80206_1692822248497_384821_17683",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Auto Waypoint Navigation Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Auto Waypoint Navigation Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Navigation System shall assist in directing the UAV to specific waypoints accurately based on predefined routes.",
+    "Id" : "9"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822248497_384821_17683_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822248497_384821_17683_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Navigation System shall assist in directing the UAV to specific waypoints accurately based on predefined routes.",
+  "req_id" : "9"
+}, {
+  "id" : "_2022x_2_5f80206_1692822250801_945054_17686",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Drop Command Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Drop Command Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Ground Control Station (GCS) shall send the appropriate command for the supply drop operation when the UAV is confirmed to be in a steady state over the drop zone.",
+    "Id" : "10"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822250801_945054_17686_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822250801_945054_17686_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Ground Control Station (GCS) shall send the appropriate command for the supply drop operation when the UAV is confirmed to be in a steady state over the drop zone.",
+  "req_id" : "10"
+}, {
+  "id" : "_2022x_2_5f80206_1692822256466_136999_17689",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement UAV Safe Descent Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::UAV Safe Descent Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The UAV shall descend and maintain the lowered altitude under the safe control of the Ground Control Station after completing the egress phase.",
+    "Id" : "11"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822256466_136999_17689_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822256466_136999_17689_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The UAV shall descend and maintain the lowered altitude under the safe control of the Ground Control Station after completing the egress phase.",
+  "req_id" : "11"
+}, {
+  "id" : "_2022x_2_5f80206_1692822555653_251492_17692",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement UAV Safe Landing Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::UAV Safe Landing Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : " The UAV shall follow a safe approach path, maintain necessary landing speed and configuration, and land safely at the home base under the control of the Ground Control Station.",
+    "Id" : "12"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822555653_251492_17692_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822555653_251492_17692_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : " The UAV shall follow a safe approach path, maintain necessary landing speed and configuration, and land safely at the home base under the control of the Ground Control Station.",
+  "req_id" : "12"
+}, {
+  "id" : "_2022x_2_5f80206_1692822578254_401268_17695",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement UAV Monitoring Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::UAV Monitoring Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Aircraft System and Ground Control Station shall monitor the UAV's status and issue warnings, if any abnormal parameters are detected.",
+    "Id" : "13"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822578254_401268_17695_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822578254_401268_17695_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Aircraft System and Ground Control Station shall monitor the UAV's status and issue warnings, if any abnormal parameters are detected.",
+  "req_id" : "13"
+}, {
+  "id" : "_2022x_2_5f80206_1692822580950_400266_17698",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement UAV Future Mission Readiness Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::UAV Future Mission Readiness Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The UAV shall be ready for subsequent operations or future missions after proper post-flight checks and maintenance. ",
+    "Id" : "14"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822580950_400266_17698_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822580950_400266_17698_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The UAV shall be ready for subsequent operations or future missions after proper post-flight checks and maintenance. ",
+  "req_id" : "14"
+}, {
+  "id" : "_2022x_2_5f80206_1692822583252_92189_17701",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Payload Weight Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Payload Weight Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The UAV shall be capable of carrying a minimum payload of [payload weight] for supply drop operations.",
+    "Id" : "15"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822583252_92189_17701_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822583252_92189_17701_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The UAV shall be capable of carrying a minimum payload of [payload weight] for supply drop operations.",
+  "req_id" : "15"
+}, {
+  "id" : "_2022x_2_5f80206_1692822676858_929217_17704",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Stability with Payload Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Stability with Payload Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Aircraft System shall ensure the distribution of weights to maintain the center of gravity and stability for the payload weight.",
+    "Id" : "16"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822676858_929217_17704_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822676858_929217_17704_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Aircraft System shall ensure the distribution of weights to maintain the center of gravity and stability for the payload weight.",
+  "req_id" : "16"
+}, {
+  "id" : "_2022x_2_5f80206_1692822679280_492644_17707",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Payload Size Accommodation Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Payload Size Accommodation Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The UAV structure shall be designed to accommodate a payload with a minimum dimension of [payload dimensions].",
+    "Id" : "17"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822679280_492644_17707_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822679280_492644_17707_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The UAV structure shall be designed to accommodate a payload with a minimum dimension of [payload dimensions].",
+  "req_id" : "17"
+}, {
+  "id" : "_2022x_2_5f80206_1692822683071_957193_17710",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Secure Payload Containment Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::Secure Payload Containment Requirement",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The Supply Payload System on the UAV shall ensure safe and secure containment of the payload during the flight and precise and controlled release of the payload during the supply drop operation.",
+    "Id" : "18"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_5f80206_1692822683071_957193_17710_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_5f80206_1692822683071_957193_17710_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The Supply Payload System on the UAV shall ensure safe and secure containment of the payload during the flight and precise and controlled release of the payload during the supply drop operation.",
+  "req_id" : "18"
+}, {
+  "id" : "_2022x_2_8300238_1702565138937_37915_17811",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement",
+  "qualified_name" : "1 Problem Domain::1 Black Box::1 Stakeholder Needs::",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "",
+    "Id" : "19"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686368_12240_17487",
+    "type" : "NumberOwner",
+    "name" : "Package 1 Stakeholder Needs"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_8300238_1702565138937_37915_17811_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565138937_37915_17811_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "",
+  "req_id" : "19"
+}, {
+  "id" : "_2022x_2_24f90527_1746544279613_695342_35387",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement LEFT STABILIZER",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::LEFT STABILIZER",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "",
+    "Id" : "33"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686415_567298_17768",
+    "type" : "Package",
+    "name" : "Package 1 Subsystem Requirements"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544279613_695342_35387_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544279613_695342_35387_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544298222_109121_35392",
+    "type" : "Requirement",
+    "name" : "Requirement Stabilizer_Length"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544302813_146132_35395",
+    "type" : "Requirement",
+    "name" : "Requirement Stabilizer_Height"
+  } ],
+  "text" : "",
+  "req_id" : "33"
+}, {
+  "id" : "_2022x_2_24f90527_1746544298222_109121_35392",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Stabilizer_Length",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::LEFT STABILIZER::Stabilizer_Length",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The LEFT STABILIZER Stabilizer_Length shall be between 324 mm and 396 mm",
+    "Id" : "33.1"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746544279613_695342_35387",
+    "type" : "Requirement",
+    "name" : "Requirement LEFT STABILIZER"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544298222_109121_35392_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544298222_109121_35392_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The LEFT STABILIZER Stabilizer_Length shall be between 324 mm and 396 mm",
+  "req_id" : "33.1"
+}, {
+  "id" : "_2022x_2_24f90527_1746544302813_146132_35395",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement Stabilizer_Height",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::LEFT STABILIZER::Stabilizer_Height",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The LEFT STABILIZER Stabilizer_Height shall be between 360 mm and 440 mm",
+    "Id" : "33.2"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746544279613_695342_35387",
+    "type" : "Requirement",
+    "name" : "Requirement LEFT STABILIZER"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544302813_146132_35395_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544302813_146132_35395_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The LEFT STABILIZER Stabilizer_Height shall be between 360 mm and 440 mm",
+  "req_id" : "33.2"
+}, {
+  "id" : "_2022x_2_24f90527_1746544142554_196509_35362",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement WING",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "",
+    "Id" : "31"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686415_567298_17768",
+    "type" : "Package",
+    "name" : "Package 1 Subsystem Requirements"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544142554_196509_35362_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544142554_196509_35362_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544155004_395439_35367",
+    "type" : "Requirement",
+    "name" : "Requirement DIHEDRAL_ANGLE"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544179098_280636_35373",
+    "type" : "Requirement",
+    "name" : "Requirement WING_LENGTH"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544183176_782979_35376",
+    "type" : "Requirement",
+    "name" : "Requirement THICKNESS_WING"
+  } ],
+  "text" : "",
+  "req_id" : "31"
+}, {
+  "id" : "_2022x_2_24f90527_1746544155004_395439_35367",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement DIHEDRAL_ANGLE",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING::DIHEDRAL_ANGLE",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The DIHEDRAL_ANGLE shall be between 1.03 deg and 1.26 deg",
+    "Id" : "31.1"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746544142554_196509_35362",
+    "type" : "Requirement",
+    "name" : "Requirement WING"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544155004_395439_35367_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544155004_395439_35367_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The DIHEDRAL_ANGLE shall be between 1.03 deg and 1.26 deg",
+  "req_id" : "31.1"
+}, {
+  "id" : "_2022x_2_24f90527_1746544179098_280636_35373",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement WING_LENGTH",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING::WING_LENGTH",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The WING_LENGTH shall be between 2250 mm and 2750 mm",
+    "Id" : "31.2"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746544142554_196509_35362",
+    "type" : "Requirement",
+    "name" : "Requirement WING"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544179098_280636_35373_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544179098_280636_35373_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The WING_LENGTH shall be between 2250 mm and 2750 mm",
+  "req_id" : "31.2"
+}, {
+  "id" : "_2022x_2_24f90527_1746544183176_782979_35376",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement THICKNESS_WING",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING::THICKNESS_WING",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The THICKNESS_WING shall be between 3.6 mm and 4.4 mm",
+    "Id" : "31.3"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746544142554_196509_35362",
+    "type" : "Requirement",
+    "name" : "Requirement WING"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544183176_782979_35376_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544183176_782979_35376_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The THICKNESS_WING shall be between 3.6 mm and 4.4 mm",
+  "req_id" : "31.3"
+}, {
+  "id" : "_2022x_2_8300238_1702565566765_103590_17890",
+  "type" : "physicalRequirement",
+  "uml_type" : "Physical Requirement",
+  "name" : "Physical Requirement Wingspan",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::Wingspan",
+  "stereotypes" : [ "physicalRequirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "",
+    "Id" : "21"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686394_223515_17633",
+    "type" : "Package",
+    "name" : "Package 2.1 Wings Subsystem 1 Solution Domain"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_8300238_1702565566765_103590_17890_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565566765_103590_17890_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "",
+  "req_id" : "21"
+}, {
+  "id" : "_2022x_2_8300238_1702565443459_548541_17848",
+  "type" : "RequirementTable",
+  "uml_type" : "Diagram",
+  "name" : "Diagram 2.1 Airframe Requirements",
+  "qualified_name" : "2.1 Wings Subsystem 1 Solution Domain::2.1 Airframe Requirements",
+  "stereotypes" : [ "RequirementTable", "DiagramTable", "DiagramInfo" ],
+  "profiles" : [ "additional_stereotypes", "MagicDraw Profile" ],
+  "tags" : {
+    "sort" : "QPROP:Element:name^Desc",
+    "hideColumns" : [ "QPROP:Element:Id", "QPROP:Element:owner", "QPROP:Element:RefinedBy", "QPROP:Element:TracedTo", "QPROP:Element:SatisfiedBy", "QPROP:Element:Master", "QPROP:Element:Derived", "QPROP:Element:DerivedFrom", "QPROP:Element:VerifiedBy", "QPROP:Element:source", "QPROP:Element:verifyMethod", "QPROP:Element:risk", "QPROP:Element:general", "QPROP:Element:documentation", "PROPERTY_COLUMN", "QPROP:Element:Bounds", "VALUE_COLUMN", "MARGIN_COLUMN" ],
+    "rowElementType" : [ {
+      "id" : "_19_0beta_8c4028a_1491909612801_342688_5361",
+      "type" : "Stereotype",
+      "name" : "Stereotype AbstractRequirement"
+    }, {
+      "id" : "_11_5EAPbeta_be00301_1147873190330_159934_2220",
+      "type" : "Stereotype",
+      "name" : "Stereotype Requirement"
+    } ],
+    "columnIds" : [ "_NUMBER_", "QPROP:Element:name", "QPROP:Element:Text", "QPROP:Element:Id", "QPROP:Element:owner", "QPROP:Element:RefinedBy", "QPROP:Element:TracedTo", "QPROP:Element:SatisfiedBy", "QPROP:Element:Master", "QPROP:Element:Derived", "QPROP:Element:DerivedFrom", "QPROP:Element:VerifiedBy", "QPROP:Element:source", "QPROP:Element:verifyMethod", "QPROP:Element:risk", "QPROP:Element:general", "QPROP:Element:documentation", "PROPERTY_COLUMN", "QPROP:Element:Bounds", "VALUE_COLUMN", "MARGIN_COLUMN" ],
+    "showDetailedColumnName" : false,
+    "additionalElements" : {
+      "id" : "_2022x_2_8300238_1702565566765_103590_17890",
+      "type" : "physicalRequirement",
+      "name" : "Physical Requirement Wingspan"
+    },
+    "displayMode" : {
+      "id" : "_18_4beta_8bb027e_1454316245517_154162_4184",
+      "type" : "Enumeration Literal",
+      "name" : "Enumeration Literal Compact tree"
+    },
+    "showElementNumber" : true,
+    "showColumnIcons" : true,
+    "showScopeAsRoot" : false,
+    "showScope" : true,
+    "showFilter" : true,
+    "showElementType" : true,
+    "Creation date" : "12/14/23, 9:50 AM",
+    "Author" : "cameo2",
+    "Modification date" : "12/14/23, 9:50 AM",
+    "Last modified by" : "cameo2"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686394_223515_17633",
+    "type" : "Package",
+    "name" : "Package 2.1 Wings Subsystem 1 Solution Domain"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_17_0beta_641020e_1285323269972_481272_1555",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_18_4beta_8bb027e_1454316266838_307823_4186",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_18_4beta_8ca0285_1458828406415_992338_4191",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_18_4beta_903028d_1459327564137_868388_4205",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_18_4_8bb027e_1464087593838_682092_4209",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_19_0_1_8550268_1522219562203_535547_4553",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_19_0_1_8550268_1522219586115_964746_4554",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_19_0_1_8550268_1523435181435_653231_4573",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_18_0beta_8e10289_1387266836276_325174_3258",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_17_0beta_641020e_1283429856637_842592_1509",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_16_8beta_8e8028e_1257349277183_113594_375",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_17_0beta_8ba0276_1284990422899_274631_1524",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_16_6beta_9020291_1246357739330_848040_336",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_be00301_1073306188629_537791_2",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_be00301_1073394345322_922552_1",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_be00301_1077726770128_871366_1",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_8300238_1702565443459_548541_17848_application_16_8beta_8ca0285_1257244649124_794756_344",
+    "type" : "String Tagged Value"
+  } ]
+}, {
+  "id" : "_2022x_2_24f90527_1746543830601_966315_35322",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement FUSELAGE",
+  "qualified_name" : "2.2 Fuselage Subsystem 2 Solution Domain::FUSELAGE",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "",
+    "Id" : "30"
+  },
+  "owner" : {
+    "id" : "_2022x_2_5f80206_1692120686375_628091_17511",
+    "type" : "Package",
+    "name" : "Package 2.2 Fuselage Subsystem 2 Solution Domain"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746543830601_966315_35322_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543830601_966315_35322_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543972288_467511_35335",
+    "type" : "Requirement",
+    "name" : "Requirement FUSELAGE_LENGTH"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544022569_804770_35346",
+    "type" : "Requirement",
+    "name" : "Requirement FUSELAGE_RADIUS"
+  } ],
+  "text" : "",
+  "req_id" : "30"
+}, {
+  "id" : "_2022x_2_24f90527_1746543972288_467511_35335",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement FUSELAGE_LENGTH",
+  "qualified_name" : "2.2 Fuselage Subsystem 2 Solution Domain::FUSELAGE::FUSELAGE_LENGTH",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The FUSELAGE_LENGTH shall be between 2452.5 mm and 2997.5 mm.",
+    "Id" : "30.1"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746543830601_966315_35322",
+    "type" : "Requirement",
+    "name" : "Requirement FUSELAGE"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746543972288_467511_35335_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543972288_467511_35335_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The FUSELAGE_LENGTH shall be between 2452.5 mm and 2997.5 mm.",
+  "req_id" : "30.1"
+}, {
+  "id" : "_2022x_2_24f90527_1746544022569_804770_35346",
+  "type" : "Requirement",
+  "uml_type" : "Requirement",
+  "name" : "Requirement FUSELAGE_RADIUS",
+  "qualified_name" : "2.2 Fuselage Subsystem 2 Solution Domain::FUSELAGE::FUSELAGE_RADIUS",
+  "stereotypes" : [ "Requirement" ],
+  "profiles" : [ "SysML" ],
+  "tags" : {
+    "Text" : "The FUSELAGE_RADIUS shall be between 90 mm and 110 mm",
+    "Id" : "30.2"
+  },
+  "owner" : {
+    "id" : "_2022x_2_24f90527_1746543830601_966315_35322",
+    "type" : "Requirement",
+    "name" : "Requirement FUSELAGE"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746544022569_804770_35346_application_11_5EAPbeta_be00301_1147873226632_528960_2311",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746544022569_804770_35346_application_11_5EAPbeta_be00301_1147873236436_846958_2313",
+    "type" : "String Tagged Value"
+  } ],
+  "text" : "The FUSELAGE_RADIUS shall be between 90 mm and 110 mm",
+  "req_id" : "30.2"
+}, {
+  "id" : "_2022x_2_24f90527_1746543673056_927103_35162",
+  "type" : "RequirementTable",
+  "uml_type" : "Diagram",
+  "name" : "Diagram Physical Requirements",
+  "qualified_name" : "Physical Requirements",
+  "stereotypes" : [ "RequirementTable", "DiagramTable", "DiagramInfo" ],
+  "profiles" : [ "additional_stereotypes", "MagicDraw Profile" ],
+  "tags" : {
+    "columnWidth" : [ 35, 267, 537, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 267, -1, -1 ],
+    "hideColumns" : [ "QPROP:Element:Id", "QPROP:Element:owner", "QPROP:Element:RefinedBy", "QPROP:Element:TracedTo", "QPROP:Element:SatisfiedBy", "QPROP:Element:Master", "QPROP:Element:Derived", "QPROP:Element:DerivedFrom", "QPROP:Element:VerifiedBy", "QPROP:Element:source", "QPROP:Element:verifyMethod", "QPROP:Element:risk", "QPROP:Element:general", "QPROP:Element:documentation", "PROPERTY_COLUMN", "VALUE_COLUMN", "MARGIN_COLUMN" ],
+    "rowElementType" : [ {
+      "id" : "_19_0beta_8c4028a_1491909612801_342688_5361",
+      "type" : "Stereotype",
+      "name" : "Stereotype AbstractRequirement"
+    }, {
+      "id" : "_11_5EAPbeta_be00301_1147873190330_159934_2220",
+      "type" : "Stereotype",
+      "name" : "Stereotype Requirement"
+    } ],
+    "columnIds" : [ "_NUMBER_", "QPROP:Element:name", "QPROP:Element:Text", "QPROP:Element:Id", "QPROP:Element:owner", "QPROP:Element:RefinedBy", "QPROP:Element:TracedTo", "QPROP:Element:SatisfiedBy", "QPROP:Element:Master", "QPROP:Element:Derived", "QPROP:Element:DerivedFrom", "QPROP:Element:VerifiedBy", "QPROP:Element:source", "QPROP:Element:verifyMethod", "QPROP:Element:risk", "QPROP:Element:general", "QPROP:Element:documentation", "PROPERTY_COLUMN", "QPROP:Element:Bounds", "VALUE_COLUMN", "MARGIN_COLUMN" ],
+    "showDetailedColumnName" : false,
+    "additionalElements" : [ {
+      "id" : "_2022x_2_24f90527_1746543830601_966315_35322",
+      "type" : "Requirement",
+      "name" : "Requirement FUSELAGE"
+    }, {
+      "id" : "_2022x_2_24f90527_1746543972288_467511_35335",
+      "type" : "Requirement",
+      "name" : "Requirement FUSELAGE_LENGTH"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544022569_804770_35346",
+      "type" : "Requirement",
+      "name" : "Requirement FUSELAGE_RADIUS"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544142554_196509_35362",
+      "type" : "Requirement",
+      "name" : "Requirement WING"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544155004_395439_35367",
+      "type" : "Requirement",
+      "name" : "Requirement DIHEDRAL_ANGLE"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544179098_280636_35373",
+      "type" : "Requirement",
+      "name" : "Requirement WING_LENGTH"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544183176_782979_35376",
+      "type" : "Requirement",
+      "name" : "Requirement THICKNESS_WING"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544279613_695342_35387",
+      "type" : "Requirement",
+      "name" : "Requirement LEFT STABILIZER"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544298222_109121_35392",
+      "type" : "Requirement",
+      "name" : "Requirement Stabilizer_Length"
+    }, {
+      "id" : "_2022x_2_24f90527_1746544302813_146132_35395",
+      "type" : "Requirement",
+      "name" : "Requirement Stabilizer_Height"
+    } ],
+    "displayMode" : {
+      "id" : "_18_4beta_8bb027e_1454316245517_154162_4184",
+      "type" : "Enumeration Literal",
+      "name" : "Enumeration Literal Compact tree"
+    },
+    "expandedRows" : "0,_2022x_2_24f90527_1746543830601_966315_35322:0,_2022x_2_24f90527_1746544142554_196509_35362:0,_2022x_2_24f90527_1746544279613_695342_35387",
+    "showElementNumber" : true,
+    "rowsOrder" : "0,_2022x_2_24f90527_1746543830601_966315_35322:1,_2022x_2_24f90527_1746543972288_467511_35335:1,_2022x_2_24f90527_1746544022569_804770_35346",
+    "showColumnIcons" : true,
+    "showScopeAsRoot" : false,
+    "showScope" : true,
+    "showFilter" : true,
+    "showElementType" : true,
+    "Creation date" : "5/6/25, 3:01 PM",
+    "Author" : "rbillings.adm",
+    "Modification date" : "5/6/25, 5:48 PM",
+    "Last modified by" : "rbillings.adm"
+  },
+  "owned_elements" : [ {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_17_0beta_641020e_1285323269972_481272_1555",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4beta_8bb027e_1454316266838_307823_4186",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4beta_8ca0285_1458828406415_992338_4191",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4beta_903028d_1459327564137_868388_4205",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4_8bb027e_1464087593838_682092_4209",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_19_0_1_8550268_1522219562203_535547_4553",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_19_0_1_8550268_1522219586115_964746_4554",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_19_0_1_8550268_1523435181435_653231_4573",
+    "type" : "Boolean Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_0beta_8e10289_1387266836276_325174_3258",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4beta_8ca0285_1458902698310_703893_4206",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_17_0beta_641020e_1283429856637_842592_1509",
+    "type" : "Element Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_16_8beta_8e8028e_1257349277183_113594_375",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_17_0beta_8ba0276_1284990422899_274631_1524",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_16_5beta1_8ba0276_1232443673774_678788_272",
+    "type" : "Integer Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_18_4beta_8bb027e_1455110673049_895110_4182",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_be00301_1073306188629_537791_2",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_be00301_1073394345322_922552_1",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_be00301_1077726770128_871366_1",
+    "type" : "String Tagged Value"
+  }, {
+    "id" : "_2022x_2_24f90527_1746543673056_927103_35162_application_16_8beta_8ca0285_1257244649124_794756_344",
+    "type" : "String Tagged Value"
+  } ]
+} ]

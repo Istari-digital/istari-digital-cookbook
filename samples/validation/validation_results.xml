@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="CAD parameter validation" tests="6" failures="1" errors="0">
+  <testcase classname="validation.cad_parameters" name="Stabilizer_Length"></testcase>
+  <testcase classname="validation.cad_parameters" name="Stabilizer_Height"></testcase>
+  <testcase classname="validation.cad_parameters" name="DIHEDRAL_ANGLE"></testcase>
+  <testcase classname="validation.cad_parameters" name="WING_LENGTH">
+    <failure message="value 1800mm not in bounds [[2250.0;2750.0]]"/>
+  </testcase>
+  <testcase classname="validation.cad_parameters" name="FUSELAGE_LENGTH"></testcase>
+  <testcase classname="validation.cad_parameters" name="FUSELAGE_RADIUS"></testcase>
+</testsuite>
