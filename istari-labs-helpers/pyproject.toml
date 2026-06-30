@@ -1,10 +1,10 @@
 [project]
 name = "istari-labs-helpers"
-version = "0.1.0"
+version = "0.2.0"
 description = "Entity-oriented wrapper over the Istari Digital Python client"
 requires-python = ">=3.10"
 dependencies = [
-    "istari-digital-client",
+    "istari-digital-client==10.14.0",
     "python-dotenv",
     "pydantic>=2.0.0",
 ]

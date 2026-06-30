@@ -3,7 +3,10 @@ Istari SDK utilities -- object-oriented wrappers over the flat client API.
 
 Entity hierarchy
 ----------------
-    IstariPlatform           (entry point, wraps Client)
+    IstariPlatform           (entry point, wraps v2 Client + v3 V3Client)
+      +-- .whoami()                   -> UserView
+      +-- .find_user() / .get_user()  -> UserView
+      +-- .client / .v3               -> SDK escape hatches
       +-- .resources()              -> ResourceQuery (lazy, chainable; .type("model") etc.)
       +-- .systems() / .jobs() / .agents() / .files() / .artifacts() / ...  -> ItemQuery (lazy)
       +-- SystemView         (wraps System)
@@ -51,6 +54,12 @@ Entity hierarchy
             +-- .step          'upload' | 'job_run' | 'promotion' | 'derived'
             +-- .parents       list[LineageNode]  (recursive)
             +-- .walk() / .print_tree()
+      +-- UserView            (wraps User)
+      |     +-- .id / .email / .display_name
+      |     +-- .tools()             -> UserToolAccessQuery (execute grants)
+      |     +-- .granted_tools()     -> list[ToolView]
+      +-- ToolView            (wraps Tool)
+            +-- .id / .name / .function_count
 
 Quick start
 -----------
@@ -58,6 +67,13 @@ Quick start
 
     configure_ssl_certificates("/path/to/ca.pem")   # optional — corporate TLS only
     platform = IstariPlatform.from_env()             # or: from_env(ca_bundle="...")
+    me = platform.whoami()
+    print(me.id, me.email)
+    for tool in me.tools():
+        print(tool.name, tool.function_count)
+
+    user = platform.get_user("bob@example.com")
+    print(len(user.tools()), "tools with execute access")
 
     # System -> baseline -> configuration -> models -> jobs
     system = platform.get_system("Berserker")
@@ -115,7 +131,8 @@ from istari_digital_client.v2.models import (
 )
 from istari_digital_client import JobStatusName
 
-from istari_labs_helpers.queries import ItemQuery, ResourceQuery
+from istari_labs_helpers._sdk import SdkClients
+from istari_labs_helpers.queries import ItemQuery, ResourceQuery, ToolQuery, UserToolAccessQuery
 
 
 # ---------------------------------------------------------------------------
@@ -1823,6 +1840,103 @@ class SystemView:
 
 
 # ---------------------------------------------------------------------------
+# UserView / ToolView
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ToolView:
+    """Fluent wrapper around a v2 :class:`~istari_digital_client.v2.models.tool.Tool`."""
+
+    _tool: Any = field(repr=False)
+    _client: IstariClient = field(repr=False)
+
+    def __repr__(self) -> str:
+        return f"Tool({self.name!r}, id={self.id})"
+
+    @property
+    def id(self) -> str:
+        return self._tool.id
+
+    @property
+    def name(self) -> str:
+        return self._tool.name
+
+    @property
+    def raw(self) -> Any:
+        return self._tool
+
+    @property
+    def functions(self) -> list[Any]:
+        return list(self._tool.functions or [])
+
+    @property
+    def function_count(self) -> int:
+        return len(self.functions)
+
+
+@dataclass
+class UserView:
+    """Fluent wrapper around a v2 :class:`~istari_digital_client.v2.models.user.User`."""
+
+    _user: Any = field(repr=False)
+    _platform: "IstariPlatform" = field(repr=False)
+
+    def __repr__(self) -> str:
+        label = self.display_name or self.email or self.id
+        return f"User({label!r}, id={self.id})"
+
+    def __str__(self) -> str:
+        if self.display_name and self.email:
+            return f"{self.display_name} ({self.email})"
+        if self.email:
+            return self.email
+        return self.id
+
+    @property
+    def id(self) -> str:
+        return self._user.id
+
+    @property
+    def email(self) -> str | None:
+        return self._user.email
+
+    @property
+    def display_name(self) -> str | None:
+        return self._user.display_name
+
+    @property
+    def user_name(self) -> str | None:
+        return self._user.user_name
+
+    @property
+    def raw(self) -> Any:
+        return self._user
+
+    def tools(self, *, include_functions: bool = True) -> UserToolAccessQuery:
+        """Tools this user may execute (Manage Tool Access / executor grants).
+
+        Works for any :class:`UserView` — including :meth:`IstariPlatform.whoami`
+        and users resolved via :meth:`IstariPlatform.get_user`::
+
+            user = platform.get_user("bob@example.com")
+            for tool in user.tools():
+                print(tool.name, tool.function_count)
+
+        Uses the permissions API (``execute`` on ``tool`` resources).  Requires
+        sufficient privileges on your token when inspecting another user.
+        """
+        return UserToolAccessQuery(
+            self._platform.client,
+            self.id,
+            include_functions=include_functions,
+        )
+
+    def granted_tools(self, *, include_functions: bool = True) -> list[ToolView]:
+        """Materialised list of :meth:`tools` (kept for explicit naming)."""
+        return self.tools(include_functions=include_functions).all()
+
+
+# ---------------------------------------------------------------------------
 # IstariPlatform  --  top-level entry point
 # ---------------------------------------------------------------------------
 
@@ -1849,13 +1963,20 @@ class IstariPlatform:
         )
     """
 
-    def __init__(self, client: IstariClient):
-        self._client = client
+    def __init__(self, client: IstariClient | SdkClients):
+        if isinstance(client, SdkClients):
+            self._sdk = client
+        else:
+            self._sdk = SdkClients.from_v2(client)
+
+    @property
+    def _client(self) -> IstariClient:
+        return self._sdk.v2
 
     @property
     def url(self) -> str | None:
         """Registry URL the wrapped client is talking to, or ``None`` if unknown."""
-        cfg = getattr(self._client, "config", None) or getattr(self._client, "configuration", None)
+        cfg = self._sdk.config
         return getattr(cfg, "registry_url", None) if cfg else None
 
     def __repr__(self) -> str:
@@ -1909,11 +2030,44 @@ class IstariPlatform:
             registry_url=registry_url,
             registry_auth_token=token,
         )
-        return cls(IstariClient(config))
+        return cls(SdkClients.from_config(config))
 
     @property
     def client(self) -> IstariClient:
-        return self._client
+        """Underlying v2 SDK client (systems, jobs, models, users, tools, …)."""
+        return self._sdk.v2
+
+    @property
+    def v3(self):
+        """Underlying v3 SDK client (unified resources, comments, remotes, …)."""
+        return self._sdk.v3
+
+    # -- identity -----------------------------------------------------------
+
+    def whoami(self) -> UserView:
+        """Return a view of the user authenticated by the current token.
+
+            me = platform.whoami()
+            print(me.id)
+            for tool in me.tools():
+                print(tool.name)
+        """
+        return UserView(_user=self._client.get_current_user(), _platform=self)
+
+    def find_user(self, email: str) -> UserView | None:
+        """Find an organization user by email (case-insensitive), or ``None``."""
+        needle = email.casefold().strip()
+        for user in ItemQuery(self._client.list_users):
+            if (user.email or "").casefold().strip() == needle:
+                return UserView(_user=user, _platform=self)
+        return None
+
+    def get_user(self, email: str) -> UserView:
+        """Find an organization user by email or raise ``LookupError``."""
+        match = self.find_user(email)
+        if match is None:
+            raise LookupError(f"No user with email {email!r}")
+        return match
 
     # -- system -------------------------------------------------------------
 
@@ -2103,9 +2257,9 @@ class IstariPlatform:
         """Lazy query against ``client.list_modules``."""
         return ItemQuery(self._client.list_modules)
 
-    def tools(self) -> ItemQuery[Any]:
-        """Lazy query against ``client.list_tools``."""
-        return ItemQuery(self._client.list_tools)
+    def tools(self) -> ToolQuery:
+        """Lazy query against ``client.list_tools``; iteration yields :class:`ToolView`."""
+        return ToolQuery(self._client.list_tools)
 
     def agents(self) -> ItemQuery[Any]:
         """Lazy query against ``client.list_agents``."""

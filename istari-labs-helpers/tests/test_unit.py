@@ -695,10 +695,104 @@ class TestIstariPlatform:
         assert isinstance(q, ItemQuery)
         assert q._list_fn is mock_client.list_agents
 
-    @patch("istari_labs_helpers.istari_utils.IstariClient")
+    def test_whoami_returns_user_view(self):
+        mock_client = MagicMock()
+        user = MagicMock()
+        user.id = "user-abc"
+        user.email = "alice@example.com"
+        user.display_name = "Alice"
+        user.user_name = None
+        mock_client.get_current_user.return_value = user
+
+        me = IstariPlatform(mock_client).whoami()
+        assert me.id == "user-abc"
+        assert me.email == "alice@example.com"
+        assert str(me) == "Alice (alice@example.com)"
+        mock_client.get_current_user.assert_called_once()
+
+    def test_tools_query_yields_tool_views(self):
+        from istari_labs_helpers import ToolView
+
+        tool = MagicMock()
+        tool.id = "tool-1"
+        tool.name = "ansys"
+        tool.functions = [MagicMock(), MagicMock()]
+        page = MagicMock()
+        page.iter_items.return_value = iter([tool])
+        mock_client = MagicMock()
+        mock_client.list_tools.return_value = page
+
+        views = list(IstariPlatform(mock_client).tools())
+        assert len(views) == 1
+        assert isinstance(views[0], ToolView)
+        assert views[0].id == "tool-1"
+        assert views[0].name == "ansys"
+        assert views[0].function_count == 2
+
+    def test_find_user_by_email(self):
+        u1 = MagicMock()
+        u1.email = "bob@example.com"
+        u1.display_name = "Bob"
+        u1.id = "u1"
+        page = MagicMock()
+        page.iter_items.return_value = iter([u1])
+        mock_client = MagicMock()
+        mock_client.list_users.return_value = page
+
+        found = IstariPlatform(mock_client).find_user("Bob@Example.com")
+        assert found is not None
+        assert found.id == "u1"
+        assert IstariPlatform(mock_client).find_user("missing@example.com") is None
+
+    def test_user_tools_returns_execute_grants(self):
+        from istari_labs_helpers import ToolView, UserToolAccessQuery
+
+        perm = MagicMock()
+        perm.resource_id = "tool-a"
+        perm_page = MagicMock()
+        perm_page.iter_items.side_effect = lambda: iter([perm])
+
+        tool_a = MagicMock()
+        tool_a.id = "tool-a"
+        tool_a.name = "ansys"
+        tool_a.functions = [MagicMock()]
+        tool_b = MagicMock()
+        tool_b.id = "tool-b"
+        tool_b.name = "other"
+        tool_b.functions = []
+        tools_page = MagicMock()
+        tools_page.iter_items.side_effect = lambda: iter([tool_a, tool_b])
+
+        mock_client = MagicMock()
+        mock_client.list_resource_type_permissions.return_value = perm_page
+        mock_client.list_tools.return_value = tools_page
+
+        user = MagicMock()
+        user.id = "user-1"
+        user.email = "bob@example.com"
+        user.display_name = "Bob"
+        user.user_name = None
+        users_page = MagicMock()
+        users_page.iter_items.return_value = iter([user])
+        mock_client.list_users.return_value = users_page
+
+        platform = IstariPlatform(mock_client)
+        bob = platform.get_user("bob@example.com")
+        q = bob.tools()
+        assert isinstance(q, UserToolAccessQuery)
+        assert q.tool_ids == {"tool-a"}
+
+        views = list(q)
+        assert len(views) == 1
+        assert isinstance(views[0], ToolView)
+        assert views[0].name == "ansys"
+        assert len(bob.granted_tools()) == 1
+
+    @patch("istari_labs_helpers._sdk.V3Client")
+    @patch("istari_labs_helpers._sdk.Client")
     @patch("istari_digital_client.configuration.Configuration")
     @patch("dotenv.load_dotenv")
-    def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _ic, monkeypatch, tmp_path):
+    def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _client, _v3, monkeypatch, tmp_path):
         bundle = tmp_path / "ca.pem"
         bundle.write_text("dummy")
         monkeypatch.setenv("ISTARI_CA_BUNDLE", str(bundle))
@@ -707,6 +801,8 @@ class TestIstariPlatform:
         with patch("istari_labs_helpers.istari_utils.ssl.create_default_context"):
             IstariPlatform.from_env(".env")
         assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
+        _client.assert_called_once()
+        _v3.assert_called_once()
 
 
 class TestItemQuery:

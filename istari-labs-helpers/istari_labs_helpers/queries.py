@@ -27,6 +27,7 @@ from typing import Any, Callable, Generic, Iterator, Optional, TypeVar
 
 from istari_digital_client.v2.models.resource_search_item import ResourceSearchItem
 from istari_digital_client.v2.models.resource_type import ResourceType
+from istari_digital_client.v2.models.tool_include import ToolInclude
 
 
 T = TypeVar("T")
@@ -170,3 +171,114 @@ class ResourceQuery(ItemQuery[ResourceSearchItem]):
         """
         rt = ResourceType(type_name) if isinstance(type_name, str) else type_name
         return self.filter(type_name=[rt])
+
+
+class ToolQuery(ItemQuery[Any]):
+    """A :class:`ItemQuery` bound to ``client.list_tools`` that yields :class:`ToolView`.
+
+    Example::
+
+        for tool in platform.tools().include(ToolInclude.FUNCTIONS):
+            print(tool.name, tool.function_count)
+    """
+
+    def include(self, *includes: ToolInclude) -> "ToolQuery":
+        """Return a new query with ``include=[...]`` (e.g. ``ToolInclude.FUNCTIONS``)."""
+        return type(self)(self._list_fn, **{**self._filters, "include": list(includes)})
+
+    def with_functions(self) -> "ToolQuery":
+        """Shortcut for ``include(ToolInclude.FUNCTIONS)``."""
+        return self.include(ToolInclude.FUNCTIONS)
+
+    def __iter__(self) -> Iterator[Any]:
+        from istari_labs_helpers.istari_utils import ToolView
+
+        client = getattr(self._list_fn, "__self__", None)
+        for tool in super().__iter__():
+            yield ToolView(_tool=tool, _client=client)
+
+
+class UserToolAccessQuery:
+    """Tools a specific user may **execute** (org-admin / Manage Tool Access).
+
+    Resolves tool ids via ``list_resource_type_permissions``, then yields
+    :class:`ToolView` instances.  Use from :meth:`UserView.tools`::
+
+        user = platform.get_user("bob@example.com")
+        for tool in user.tools():
+            print(tool.name, tool.function_count)
+
+    Requires an org-admin (or otherwise privileged) token when querying
+    another user's grants.
+    """
+
+    def __init__(self, client: Any, user_id: str, *, include_functions: bool = True) -> None:
+        self._client = client
+        self._user_id = user_id
+        self._include_functions = include_functions
+        self._tool_ids: set[str] | None = None
+
+    def _resolve_tool_ids(self) -> set[str]:
+        if self._tool_ids is not None:
+            return self._tool_ids
+        from istari_digital_client.exceptions import ApiException
+        from istari_digital_client.v2.models import (
+            Permission,
+            PermissionResourceType,
+            PermissionSubjectType,
+        )
+
+        try:
+            page = self._client.list_resource_type_permissions(
+                subject_type=PermissionSubjectType.USER,
+                subject_id=self._user_id,
+                resource_type=PermissionResourceType.TOOL,
+                permission=Permission.EXECUTE,
+            )
+            self._tool_ids = {p.resource_id for p in page.iter_items() if p.resource_id}
+        except ApiException:
+            self._tool_ids = set()
+        return self._tool_ids
+
+    @property
+    def tool_ids(self) -> set[str]:
+        """Tool ids this user has **execute** permission on."""
+        return set(self._resolve_tool_ids())
+
+    def with_functions(self) -> "UserToolAccessQuery":
+        """Return a query that includes function metadata on each tool."""
+        return type(self)(self._client, self._user_id, include_functions=True)
+
+    def without_functions(self) -> "UserToolAccessQuery":
+        """Return a lighter query (``get_tool`` per id, no function list)."""
+        return type(self)(self._client, self._user_id, include_functions=False)
+
+    def __iter__(self) -> Iterator[Any]:
+        from istari_labs_helpers.istari_utils import ToolView
+
+        ids = self._resolve_tool_ids()
+        if not ids:
+            return
+        if self._include_functions:
+            page = self._client.list_tools(
+                size=DEFAULT_PAGE_SIZE,
+                include=[ToolInclude.FUNCTIONS],
+            )
+            for tool in page.iter_items():
+                if tool.id in ids:
+                    yield ToolView(_tool=tool, _client=self._client)
+        else:
+            for tid in sorted(ids):
+                yield ToolView(_tool=self._client.get_tool(tid), _client=self._client)
+
+    def first(self) -> Any | None:
+        return next(iter(self), None)
+
+    def all(self) -> list[Any]:
+        return list(self)
+
+    def count(self) -> int:
+        return len(self._resolve_tool_ids())
+
+    def __len__(self) -> int:
+        return self.count()

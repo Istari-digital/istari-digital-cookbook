@@ -43,9 +43,18 @@ ISTARI_PERSONAL_ACCESS_TOKEN=your_personal_access_token
 
 ```
 IstariPlatform                (entry point)
+  +-- .whoami()                      -> UserView
+  +-- .find_user() / .get_user()     -> UserView
+  +-- .client / .v3                  -> v2 Client / v3 V3Client (SDK escape hatches)
   +-- .resources()                   -> ResourceQuery  (lazy; .type("model") etc.)
-  +-- .systems() / .jobs() / .agents() / .files() / .artifacts() / .snapshots() / ...
-  |                                  -> ItemQuery      (lazy, chainable, immutable)
+  +-- .systems() / .jobs() / .tools() / .agents() / .files() / .artifacts() / ...
+  |                                  -> ItemQuery or ToolQuery (lazy, chainable)
+  +-- UserView                (wraps User)
+  |     +-- .id / .email / .display_name
+  |     +-- .tools()                 -> UserToolAccessQuery (execute grants for this user)
+  |     +-- .granted_tools()         -> list[ToolView]
+  +-- ToolView                (wraps Tool)
+  |     +-- .id / .name / .functions / .function_count
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
   |     +-- .configurations          -> list[ConfigurationView]
@@ -90,6 +99,27 @@ from istari_labs_helpers import IstariPlatform, JobDefinition
 
 platform = IstariPlatform.from_env()  # reads .env
 ```
+
+### Who am I? List a user's tools
+
+```python
+me = platform.whoami()
+print(me.id)                    # user uuid
+print(me)                       # "Alice (alice@example.com)"
+
+for tool in me.tools():         # tools you may execute
+    print(tool.name, tool.function_count)
+
+# Org-admin: another user's execute grants (Manage Tool Access)
+user = platform.get_user("bob@example.com")
+print(user.id)
+for tool in user.tools():
+    print(tool.id, tool.name)
+print(f"{len(user.tools())} tool(s) with execute access")
+```
+
+To browse the **full tool catalog** visible to your admin token (not scoped to
+one user), use ``platform.tools()`` instead.
 
 ### Browse a system's baseline models and their jobs
 
