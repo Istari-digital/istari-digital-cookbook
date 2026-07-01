@@ -258,13 +258,25 @@ def submit_job(client: Client, model_id: str, updates: list[dict], sources: list
     return job
 
 
+def get_status_name(job) -> str:
+    """Extract the status string from a Job object, handling SDK attribute variations."""
+    if not job.status:
+        return "Unknown"
+    s = job.status
+    for attr in ("status_name", "name", "value", "status"):
+        val = getattr(s, attr, None)
+        if val is not None:
+            return str(val)
+    return str(s)
+
+
 def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
     print(f"Waiting for job {job_id} to complete (poll every {poll_interval}s, timeout {timeout}s)...")
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
         job = client.get_job(job_id=job_id)
-        current_status = job.status.status_name if job.status else "Unknown"
+        current_status = get_status_name(job)
         if current_status != last_status:
             print(f"  Status: {current_status}")
             last_status = current_status
@@ -275,7 +287,7 @@ def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
 
 
 def print_job_result(job, twc_mode: bool):
-    status = job.status.status_name if job.status else "Unknown"
+    status = get_status_name(job)
     print(f"\nJob finished with status: {status}")
     if status == "Completed":
         if twc_mode:
@@ -288,7 +300,7 @@ def print_job_result(job, twc_mode: bool):
             for output in job.outputs:
                 print(f"  {output}")
     elif status == "Failed":
-        message = (job.status.message or "") if job.status and hasattr(job.status, "message") else ""
+        message = getattr(job.status, "message", "") or "" if job.status else ""
         print(f"Job failed. Message: {message}")
         sys.exit(1)
     else:
