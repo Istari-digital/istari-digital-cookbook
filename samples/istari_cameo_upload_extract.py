@@ -72,9 +72,14 @@ def parse_args():
     # --- TWC options ---
     twc = parser.add_argument_group("Teamwork Cloud options (--twc mode)")
     twc.add_argument(
+        "--model-id",
+        metavar="ID",
+        help="Existing Istari model ID — skips upload, uses this model directly",
+    )
+    twc.add_argument(
         "--twc-metadata",
         metavar="FILE",
-        help="Path to .istari_teamwork_cloud_metadata_mdzip metadata file (required for --twc)",
+        help="Path to .istari_teamwork_cloud_metadata_mdzip metadata file (used when --model-id is not set)",
     )
     twc.add_argument(
         "--twc-auth",
@@ -110,9 +115,9 @@ def parse_args():
 
 def validate_args(args):
     if args.twc:
-        if not args.twc_metadata:
-            sys.exit("Error: --twc requires --twc-metadata (path to .istari_teamwork_cloud_metadata_mdzip file).")
-        if not os.path.isfile(args.twc_metadata):
+        if not args.model_id and not args.twc_metadata:
+            sys.exit("Error: --twc requires either --model-id (existing model) or --twc-metadata (metadata file to upload).")
+        if args.twc_metadata and not os.path.isfile(args.twc_metadata):
             sys.exit(f"Error: TWC metadata file not found: {args.twc_metadata}")
         if not os.path.isfile(args.twc_auth):
             sys.exit(
@@ -162,15 +167,20 @@ def resolve_model_local(client: Client, args) -> tuple[str, list]:
 
 
 def resolve_model_twc(client: Client, args) -> tuple[str, list]:
-    print(f"Uploading TWC metadata file: {args.twc_metadata}")
-    model = client.add_model(
-        path=args.twc_metadata,
-        display_name=args.display_name or Path(args.twc_metadata).stem,
-        description=args.description,
-    )
-    print(f"  TWC model record created  id={model.id}")
+    if args.model_id:
+        print(f"Using existing Istari model  id={args.model_id}")
+        model_id = args.model_id
+    else:
+        print(f"Uploading TWC metadata file: {args.twc_metadata}")
+        model = client.add_model(
+            path=args.twc_metadata,
+            display_name=args.display_name or Path(args.twc_metadata).stem,
+            description=args.description,
+        )
+        print(f"  TWC model record created  id={model.id}")
+        model_id = model.id
     auth_source = add_twc_auth_source(client, args.twc_auth)
-    return model.id, [auth_source]
+    return model_id, [auth_source]
 
 
 def submit_extract_job(client: Client, model_id: str, sources: list,
