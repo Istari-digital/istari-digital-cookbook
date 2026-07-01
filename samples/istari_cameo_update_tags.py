@@ -235,12 +235,13 @@ def build_parameters(args, updates: list[dict]) -> dict:
 
 def submit_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str, twc_mode: bool = False):
     function = "@istari:twc_update_tags" if twc_mode else "@istari:update_tags"
-    print(f"Submitting {function}  tool_version={tool_version}  os={operating_system}")
+    tool_name = "teamwork_cloud" if twc_mode else "dassault_cameo"
+    print(f"Submitting {function}  tool_name={tool_name}  tool_version={tool_version}  os={operating_system}")
     print(f"  Targeting {len(parameters['updates'])} element update(s)")
     job = client.add_job(
         model_id=model_id,
         function=function,
-        tool_name="dassault_cameo",
+        tool_name=tool_name,
         tool_version=tool_version,
         operating_system=operating_system,
         parameters=parameters,
