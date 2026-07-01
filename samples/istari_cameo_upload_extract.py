@@ -1,37 +1,48 @@
 """
-Run @istari:extract on a Cameo model via the Istari Digital Platform.
+Run @istari:extract or @istari:twc_extract on a Cameo model via Istari Digital.
 
 Two mutually exclusive modes:
 
-  LOCAL MODE  — upload a local .mdzip file, then run the extraction job.
-  TWC MODE    — the agent fetches the model directly from Teamwork Cloud;
-                no local file is needed. Requires an existing Istari model
-                record to attach the job to (--model-id).
+  LOCAL MODE  — upload a local .mdzip file, then run @istari:extract.
+  TWC MODE    — upload a .istari_teamwork_cloud_metadata_mdzip metadata file and
+                an auth_secret.json, then run @istari:twc_extract. No local
+                download of the model required.
 
 Configuration via environment variables or CLI flags:
   ISTARI_REGISTRY_URL        - Platform URL (e.g. https://your-instance.istari.digital)
   ISTARI_REGISTRY_AUTH_TOKEN - Personal access token
 
-  TWC_USERNAME               - Teamwork Cloud username        (TWC mode)
-  TWC_PASSWORD               - Teamwork Cloud password        (TWC mode)
-  TWC_PROJECT_URL            - URL to the TWC project/branch  (TWC mode)
+TWC auth_secret.json format:
+  { "username": "your_username", "password": "your_password" }
+
+TWC metadata file format (.istari_teamwork_cloud_metadata_mdzip):
+  {
+    "project_id": "twcloud:/ac084d05.../6fc8e2dd...",
+    "branch_name": "trunk",
+    "version": "12",
+    "server_name": "192.0.2.10"
+  }
 
 Usage — local file:
   python istari_cameo_upload_extract.py --local /path/to/model.mdzip
 
 Usage — Teamwork Cloud:
   python istari_cameo_upload_extract.py --twc \\
-      --model-id <istari-model-id> \\
-      --twc-project-url "https://twc24.uat.mbx.us.lmco.com/your/project" \\
-      --twc-username myuser --twc-password mypass
+      --twc-metadata my_project.istari_teamwork_cloud_metadata_mdzip \\
+      --twc-auth auth_secret.json
+
+Optional — scope extraction to a sub-tree:
+  python istari_cameo_upload_extract.py --local /path/to/model.mdzip \\
+      --root-element-id "_2021x_2_38b206bc_1744829738919_924302_3837"
 """
 
 import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
-from istari_digital_client import Client, Configuration
+from istari_digital_client import Client, Configuration, FunctionAuthType, NewSource
 
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Canceled"}
@@ -39,11 +50,11 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Canceled"}
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run @istari:extract on a Cameo model (local upload or Teamwork Cloud)",
+        description="Run @istari:extract or @istari:twc_extract on a Cameo model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # --- Source mode (mutually exclusive) ---
+    # --- Source mode ---
     source = parser.add_argument_group("Model source (choose one)")
     mode = source.add_mutually_exclusive_group(required=True)
     mode.add_argument(
@@ -55,24 +66,22 @@ def parse_args():
     mode.add_argument(
         "--twc",
         action="store_true",
-        help="Model lives in Teamwork Cloud — no local file upload",
+        help="Model lives in Teamwork Cloud",
     )
 
     # --- TWC options ---
     twc = parser.add_argument_group("Teamwork Cloud options (--twc mode)")
     twc.add_argument(
-        "--model-id",
-        metavar="ID",
-        help="Existing Istari model ID to attach the job to (required for --twc)",
+        "--twc-metadata",
+        metavar="FILE",
+        help="Path to .istari_teamwork_cloud_metadata_mdzip metadata file (required for --twc)",
     )
     twc.add_argument(
-        "--twc-project-url",
-        metavar="URL",
-        default=None,
-        help="URL of the TWC project/branch (overrides TWC_PROJECT_URL)",
+        "--twc-auth",
+        metavar="FILE",
+        default="auth_secret.json",
+        help="Path to auth_secret.json with TWC username/password (default: auth_secret.json)",
     )
-    twc.add_argument("--twc-username", metavar="USER", default=None, help="TWC username (overrides TWC_USERNAME)")
-    twc.add_argument("--twc-password", metavar="PASS", default=None, help="TWC password (overrides TWC_PASSWORD)")
 
     # --- Istari platform auth ---
     auth = parser.add_argument_group("Istari platform auth")
@@ -81,13 +90,18 @@ def parse_args():
 
     # --- Job execution ---
     job = parser.add_argument_group("Job execution")
-    job.add_argument("--tool-version", default="2024x-refresh2", help="Cameo version (default: 2024x-refresh2)")
+    job.add_argument("--tool-version", default="2022x Refresh2", help="Cameo version (default: '2022x Refresh2')")
     job.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
     job.add_argument("--poll-interval", type=int, default=10, help="Seconds between status polls (default: 10)")
     job.add_argument("--timeout", type=int, default=3600, help="Max wait seconds (default: 3600)")
+    job.add_argument(
+        "--root-element-id",
+        default=None,
+        help="Optional: scope extraction to a sub-tree rooted at this element ID",
+    )
 
-    # --- Local-upload metadata ---
-    meta = parser.add_argument_group("Model metadata (--local mode)")
+    # --- Model metadata ---
+    meta = parser.add_argument_group("Model metadata")
     meta.add_argument("--display-name", default=None, help="Human-readable name for the uploaded model")
     meta.add_argument("--description", default=None, help="Description for the uploaded model")
 
@@ -96,15 +110,15 @@ def parse_args():
 
 def validate_args(args):
     if args.twc:
-        if not args.model_id:
-            sys.exit("Error: --twc requires --model-id (the Istari model ID to attach the job to).")
-        twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
-        if not twc_url:
-            sys.exit("Error: --twc requires --twc-project-url or TWC_PROJECT_URL.")
-        twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
-        twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
-        if not twc_user or not twc_pass:
-            sys.exit("Error: --twc requires TWC credentials (--twc-username/--twc-password or TWC_USERNAME/TWC_PASSWORD).")
+        if not args.twc_metadata:
+            sys.exit("Error: --twc requires --twc-metadata (path to .istari_teamwork_cloud_metadata_mdzip file).")
+        if not os.path.isfile(args.twc_metadata):
+            sys.exit(f"Error: TWC metadata file not found: {args.twc_metadata}")
+        if not os.path.isfile(args.twc_auth):
+            sys.exit(
+                f"Error: TWC auth file not found: {args.twc_auth}\n"
+                "Create auth_secret.json with: {\"username\": \"...\", \"password\": \"...\"}"
+            )
     else:
         if not os.path.isfile(args.local_path):
             sys.exit(f"Error: file not found: {args.local_path}")
@@ -122,51 +136,62 @@ def build_client(args) -> Client:
     return Client(Configuration(registry_url=registry_url, registry_auth_token=registry_auth_token))
 
 
-def resolve_model_local(client: Client, args) -> str:
-    """Upload a local .mdzip and return the new model ID."""
+def add_twc_auth_source(client: Client, auth_path: str) -> NewSource:
+    """Upload the auth_secret.json as an encrypted function auth secret."""
+    print(f"  Registering TWC auth secret from: {auth_path}")
+    secret = client.add_function_auth_secret(
+        path=auth_path,
+        function_auth_type=FunctionAuthType.BASIC,
+    )
+    return NewSource(
+        revision_id=secret.revision.id,
+        relationship_identifier="twc_auth_login",
+    )
+
+
+def resolve_model_local(client: Client, args) -> tuple[str, list]:
     path = args.local_path
-    print(f"Uploading model: {path}")
+    print(f"Uploading local model: {path}")
     model = client.add_model(
         path=path,
         display_name=args.display_name or os.path.basename(path),
         description=args.description,
     )
     print(f"  Model uploaded  id={model.id}  name={model.display_name}")
-    return model.id
+    return model.id, []
 
 
-def resolve_model_twc(args) -> str:
-    """Return the existing Istari model ID for a TWC-hosted model."""
-    print(f"Using existing Istari model  id={args.model_id}")
-    return args.model_id
+def resolve_model_twc(client: Client, args) -> tuple[str, list]:
+    print(f"Uploading TWC metadata file: {args.twc_metadata}")
+    model = client.add_model(
+        path=args.twc_metadata,
+        display_name=args.display_name or Path(args.twc_metadata).stem,
+        description=args.description,
+    )
+    print(f"  TWC model record created  id={model.id}")
+    auth_source = add_twc_auth_source(client, args.twc_auth)
+    return model.id, [auth_source]
 
 
-def build_parameters(args) -> dict:
-    """Build job parameters. Empty for local mode; TWC link + credentials for TWC mode."""
-    if not args.twc:
-        return {}
+def submit_extract_job(client: Client, model_id: str, sources: list,
+                       tool_version: str, operating_system: str,
+                       twc_mode: bool, root_element_id: str | None):
+    function = "@istari:twc_extract" if twc_mode else "@istari:extract"
+    print(f"Submitting {function}  tool_version={tool_version!r}  os={operating_system!r}")
 
-    twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
-    twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
-    twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
+    parameters = {}
+    if root_element_id:
+        parameters["root_element_id"] = root_element_id
+        print(f"  Scoped to root element: {root_element_id}")
 
-    return {
-        "twc_link": twc_url,
-        "auth_info": {"type": "basic", "username": twc_user, "password": twc_pass},
-    }
-
-
-def submit_extract_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str, twc_mode: bool = False):
-    function = "@istari:extract"
-    tool_name = "teamwork_cloud" if twc_mode else "dassault_cameo"
-    print(f"Submitting {function} job  tool_name={tool_name}  tool_version={tool_version}  os={operating_system}")
     job = client.add_job(
         model_id=model_id,
         function=function,
-        tool_name=tool_name,
+        tool_name="dassault_cameo",
         tool_version=tool_version,
         operating_system=operating_system,
-        parameters=parameters or None,
+        parameters=parameters if parameters else None,
+        sources=sources if sources else None,
     )
     print(f"  Job created  id={job.id}")
     return job
@@ -176,7 +201,6 @@ def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
     print(f"Waiting for job {job_id} to complete (poll every {poll_interval}s, timeout {timeout}s)...")
     deadline = time.time() + timeout
     last_status = None
-
     while time.time() < deadline:
         job = client.get_job(job_id=job_id)
         current_status = job.status.status_name if job.status else "Unknown"
@@ -186,14 +210,12 @@ def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
         if current_status in TERMINAL_STATUSES:
             return job
         time.sleep(poll_interval)
-
     sys.exit(f"Error: job {job_id} did not complete within {timeout} seconds.")
 
 
 def print_job_result(job):
     status = job.status.status_name if job.status else "Unknown"
     print(f"\nJob finished with status: {status}")
-
     if status == "Completed":
         print("Extraction completed successfully.")
         if hasattr(job, "outputs") and job.outputs:
@@ -220,12 +242,11 @@ def main():
         print(f"Connected to Istari platform  version={compat.server_version}")
 
     if args.twc:
-        model_id = resolve_model_twc(args)
+        model_id, sources = resolve_model_twc(client, args)
     else:
-        model_id = resolve_model_local(client, args)
+        model_id, sources = resolve_model_local(client, args)
 
-    parameters = build_parameters(args)
-    job = submit_extract_job(client, model_id, parameters, args.tool_version, args.os, twc_mode=args.twc)
+    job = submit_extract_job(client, model_id, sources, args.tool_version, args.os, args.twc, args.root_element_id)
     completed_job = wait_for_job(client, job.id, args.poll_interval, args.timeout)
     print_job_result(completed_job)
 

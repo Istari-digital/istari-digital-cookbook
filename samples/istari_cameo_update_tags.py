@@ -1,20 +1,27 @@
 """
-Run @istari:update_tags on a Cameo model to write tags onto model elements.
+Run @istari:update_tags or @istari:twc_update_tags on a Cameo model via Istari Digital.
 
 Two mutually exclusive modes:
 
-  LOCAL MODE  — upload a local .mdzip file, then run the job against it.
-  TWC MODE    — the agent fetches the model directly from Teamwork Cloud;
-                no local file is needed. Requires an existing Istari model
-                record to attach the job to (--model-id).
+  LOCAL MODE  — upload a local .mdzip file, then run @istari:update_tags.
+  TWC MODE    — upload a .istari_teamwork_cloud_metadata_mdzip metadata file and
+                an auth_secret.json, then run @istari:twc_update_tags. The modified
+                project is committed back to Teamwork Cloud as a new version.
 
 Configuration via environment variables or CLI flags:
   ISTARI_REGISTRY_URL        - Platform URL (e.g. https://your-instance.istari.digital)
   ISTARI_REGISTRY_AUTH_TOKEN - Personal access token
 
-  TWC_USERNAME               - Teamwork Cloud username        (TWC mode)
-  TWC_PASSWORD               - Teamwork Cloud password        (TWC mode)
-  TWC_PROJECT_URL            - URL to the TWC project/branch  (TWC mode)
+TWC auth_secret.json format:
+  { "username": "your_username", "password": "your_password" }
+
+TWC metadata file format (.istari_teamwork_cloud_metadata_mdzip):
+  {
+    "project_id": "twcloud:/ac084d05.../6fc8e2dd...",
+    "branch_name": "trunk",
+    "version": "12",
+    "server_name": "192.0.2.10"
+  }
 
 Usage — local file:
   python istari_cameo_update_tags.py --local /path/to/model.mdzip \\
@@ -25,9 +32,8 @@ Usage — local file:
 
 Usage — Teamwork Cloud:
   python istari_cameo_update_tags.py --twc \\
-      --model-id <istari-model-id> \\
-      --twc-project-url "https://twc.example.com/.../<project>" \\
-      --twc-username myuser --twc-password mypass \\
+      --twc-metadata my_project.istari_teamwork_cloud_metadata_mdzip \\
+      --twc-auth auth_secret.json \\
       --tags-file tags.json
 
 Tag file format (JSON array):
@@ -43,7 +49,7 @@ Tag file format (JSON array):
     }
   ]
 
-Set a tag value to null (in JSON file) or use KEY= (CLI) to clear a tag.
+Set a tag value to null (JSON file) or KEY= (CLI) to clear a tag.
 """
 
 import argparse
@@ -51,8 +57,9 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-from istari_digital_client import Client, Configuration
+from istari_digital_client import Client, Configuration, FunctionAuthType, NewSource
 
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Canceled"}
@@ -60,11 +67,11 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Canceled"}
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run @istari:update_tags on a Cameo model (local upload or Teamwork Cloud)",
+        description="Run @istari:update_tags or @istari:twc_update_tags on a Cameo model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # --- Source mode (mutually exclusive) ---
+    # --- Source mode ---
     source = parser.add_argument_group("Model source (choose one)")
     mode = source.add_mutually_exclusive_group(required=True)
     mode.add_argument(
@@ -76,24 +83,22 @@ def parse_args():
     mode.add_argument(
         "--twc",
         action="store_true",
-        help="Model lives in Teamwork Cloud — no local file upload",
+        help="Model lives in Teamwork Cloud",
     )
 
-    # --- TWC options (only relevant with --twc) ---
+    # --- TWC options ---
     twc = parser.add_argument_group("Teamwork Cloud options (--twc mode)")
     twc.add_argument(
-        "--model-id",
-        metavar="ID",
-        help="Existing Istari model ID to attach the job to (required for --twc)",
+        "--twc-metadata",
+        metavar="FILE",
+        help="Path to .istari_teamwork_cloud_metadata_mdzip metadata file (required for --twc)",
     )
     twc.add_argument(
-        "--twc-project-url",
-        metavar="URL",
-        default=None,
-        help="URL of the TWC project/branch (overrides TWC_PROJECT_URL)",
+        "--twc-auth",
+        metavar="FILE",
+        default="auth_secret.json",
+        help="Path to auth_secret.json with TWC username/password (default: auth_secret.json)",
     )
-    twc.add_argument("--twc-username", metavar="USER", default=None, help="TWC username (overrides TWC_USERNAME)")
-    twc.add_argument("--twc-password", metavar="PASS", default=None, help="TWC password (overrides TWC_PASSWORD)")
 
     # --- Istari platform auth ---
     auth = parser.add_argument_group("Istari platform auth")
@@ -103,21 +108,9 @@ def parse_args():
     # --- Tag specification ---
     tags = parser.add_argument_group("Tag specification (choose one)")
     tag_src = tags.add_mutually_exclusive_group(required=True)
-    tag_src.add_argument(
-        "--tags-file",
-        metavar="FILE",
-        help="JSON file containing the updates array",
-    )
-    tag_src.add_argument(
-        "--element-id",
-        metavar="ID",
-        help="Single element ID to tag (use with --tag)",
-    )
-    tag_src.add_argument(
-        "--element-name",
-        metavar="NAME",
-        help="Single element name to tag (use with --tag)",
-    )
+    tag_src.add_argument("--tags-file", metavar="FILE", help="JSON file containing the updates array")
+    tag_src.add_argument("--element-id", metavar="ID", help="Single element ID to tag (use with --tag)")
+    tag_src.add_argument("--element-name", metavar="NAME", help="Single element name to tag (use with --tag)")
     tags.add_argument(
         "--tag",
         metavar="KEY=VALUE",
@@ -134,7 +127,7 @@ def parse_args():
 
     # --- Job execution ---
     job = parser.add_argument_group("Job execution")
-    job.add_argument("--tool-version", default="2024x-refresh2", help="Cameo version (default: 2024x-refresh2)")
+    job.add_argument("--tool-version", default="2022x Refresh2", help="Cameo version (default: '2022x Refresh2')")
     job.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
     job.add_argument("--poll-interval", type=int, default=10, help="Seconds between status polls (default: 10)")
     job.add_argument("--timeout", type=int, default=3600, help="Max wait seconds (default: 3600)")
@@ -149,15 +142,15 @@ def parse_args():
 
 def validate_args(args):
     if args.twc:
-        if not args.model_id:
-            sys.exit("Error: --twc requires --model-id (the Istari model ID to attach the job to).")
-        twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
-        if not twc_url:
-            sys.exit("Error: --twc requires --twc-project-url or TWC_PROJECT_URL.")
-        twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
-        twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
-        if not twc_user or not twc_pass:
-            sys.exit("Error: --twc requires TWC credentials (--twc-username/--twc-password or TWC_USERNAME/TWC_PASSWORD).")
+        if not args.twc_metadata:
+            sys.exit("Error: --twc requires --twc-metadata (path to .istari_teamwork_cloud_metadata_mdzip file).")
+        if not os.path.isfile(args.twc_metadata):
+            sys.exit(f"Error: TWC metadata file not found: {args.twc_metadata}")
+        if not os.path.isfile(args.twc_auth):
+            sys.exit(
+                f"Error: TWC auth file not found: {args.twc_auth}\n"
+                "Create auth_secret.json with: {{\"username\": \"...\", \"password\": \"...\"}}"
+            )
     else:
         if not os.path.isfile(args.local_path):
             sys.exit(f"Error: file not found: {args.local_path}")
@@ -191,8 +184,7 @@ def build_updates(args) -> list[dict]:
         if "=" not in kv:
             sys.exit(f"Error: --tag must be KEY=VALUE, got: {kv!r}")
         key, _, value = kv.partition("=")
-        tags[key] = value if value else None  # empty value → clear the tag
-
+        tags[key] = value if value else None
     update: dict = {"tags": tags, "replace_existing": args.replace_existing}
     if args.element_id:
         update["element_id"] = args.element_id
@@ -201,50 +193,56 @@ def build_updates(args) -> list[dict]:
     return [update]
 
 
-def resolve_model_local(client: Client, args) -> str:
-    """Upload a local .mdzip and return the new model ID."""
+def add_twc_auth_source(client: Client, auth_path: str) -> NewSource:
+    """Upload the auth_secret.json as an encrypted function auth secret."""
+    print(f"  Registering TWC auth secret from: {auth_path}")
+    secret = client.add_function_auth_secret(
+        path=auth_path,
+        function_auth_type=FunctionAuthType.BASIC,
+    )
+    return NewSource(
+        revision_id=secret.revision.id,
+        relationship_identifier="twc_auth_login",
+    )
+
+
+def resolve_model_local(client: Client, args) -> tuple[str, list]:
     path = args.local_path
-    print(f"Uploading model: {path}")
+    print(f"Uploading local model: {path}")
     model = client.add_model(
         path=path,
         display_name=args.display_name or os.path.basename(path),
         description=args.description,
     )
     print(f"  Model uploaded  id={model.id}  name={model.display_name}")
-    return model.id
+    return model.id, []
 
 
-def resolve_model_twc(args) -> str:
-    """Return the existing Istari model ID for a TWC-hosted model."""
-    print(f"Using existing Istari model  id={args.model_id}")
-    return args.model_id
+def resolve_model_twc(client: Client, args) -> tuple[str, list]:
+    print(f"Uploading TWC metadata file: {args.twc_metadata}")
+    model = client.add_model(
+        path=args.twc_metadata,
+        display_name=args.display_name or Path(args.twc_metadata).stem,
+        description=args.description,
+    )
+    print(f"  TWC model record created  id={model.id}")
+    auth_source = add_twc_auth_source(client, args.twc_auth)
+    return model.id, [auth_source]
 
 
-def build_parameters(args, updates: list[dict]) -> dict:
-    params: dict = {"updates": updates}
-
-    if args.twc:
-        twc_url = args.twc_project_url or os.environ.get("TWC_PROJECT_URL")
-        twc_user = args.twc_username or os.environ.get("TWC_USERNAME")
-        twc_pass = args.twc_password or os.environ.get("TWC_PASSWORD")
-        params["twc_link"] = twc_url
-        params["auth_info"] = {"type": "basic", "username": twc_user, "password": twc_pass}
-
-    return params
-
-
-def submit_job(client: Client, model_id: str, parameters: dict, tool_version: str, operating_system: str, twc_mode: bool = False):
+def submit_job(client: Client, model_id: str, updates: list[dict], sources: list,
+               tool_version: str, operating_system: str, twc_mode: bool):
     function = "@istari:twc_update_tags" if twc_mode else "@istari:update_tags"
-    tool_name = "teamwork_cloud" if twc_mode else "dassault_cameo"
-    print(f"Submitting {function}  tool_name={tool_name}  tool_version={tool_version}  os={operating_system}")
-    print(f"  Targeting {len(parameters['updates'])} element update(s)")
+    print(f"Submitting {function}  tool_version={tool_version!r}  os={operating_system!r}")
+    print(f"  Targeting {len(updates)} element update(s)")
     job = client.add_job(
         model_id=model_id,
         function=function,
-        tool_name=tool_name,
+        tool_name="dassault_cameo",
         tool_version=tool_version,
         operating_system=operating_system,
-        parameters=parameters,
+        parameters={"updates": updates},
+        sources=sources if sources else None,
     )
     print(f"  Job created  id={job.id}")
     return job
@@ -266,11 +264,15 @@ def wait_for_job(client: Client, job_id: str, poll_interval: int, timeout: int):
     sys.exit(f"Error: job {job_id} did not complete within {timeout} seconds.")
 
 
-def print_job_result(job):
+def print_job_result(job, twc_mode: bool):
     status = job.status.status_name if job.status else "Unknown"
     print(f"\nJob finished with status: {status}")
     if status == "Completed":
-        print("Tags updated successfully.")
+        if twc_mode:
+            print("Tags committed back to Teamwork Cloud as a new version.")
+            print("Refresh the model with client.get_model(model_id) to get the latest revision.")
+        else:
+            print("Tags updated successfully. The modified model is available as a new artifact.")
         if hasattr(job, "outputs") and job.outputs:
             print("Outputs:")
             for output in job.outputs:
@@ -296,14 +298,13 @@ def main():
         print(f"Connected to Istari platform  version={compat.server_version}")
 
     if args.twc:
-        model_id = resolve_model_twc(args)
+        model_id, sources = resolve_model_twc(client, args)
     else:
-        model_id = resolve_model_local(client, args)
+        model_id, sources = resolve_model_local(client, args)
 
-    parameters = build_parameters(args, updates)
-    job = submit_job(client, model_id, parameters, args.tool_version, args.os, twc_mode=args.twc)
+    job = submit_job(client, model_id, updates, sources, args.tool_version, args.os, args.twc)
     completed_job = wait_for_job(client, job.id, args.poll_interval, args.timeout)
-    print_job_result(completed_job)
+    print_job_result(completed_job, args.twc)
 
 
 if __name__ == "__main__":
