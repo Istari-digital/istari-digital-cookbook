@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Literal
@@ -480,7 +481,7 @@ def run_pipeline(
         if dry_run:
             print(f"  [dry-run] {fname} written locally")
         else:
-            tmp = Path(f"/tmp/{fname}")
+            tmp = Path(tempfile.gettempdir()) / fname
             tmp.write_text(json.dumps(spec_data, indent=2))
             resource = istari.upload_model(
                 tmp, fname,
@@ -516,7 +517,7 @@ def run_pipeline(
     (local_out / summary_fname).write_text(json.dumps(summary, indent=2))
 
     if not dry_run:
-        tmp = Path(f"/tmp/{summary_fname}")
+        tmp = Path(tempfile.gettempdir()) / summary_fname
         tmp.write_text(json.dumps(summary, indent=2))
         resource = istari.upload_model(tmp, summary_fname, "Part Search Agent run summary")
         tmp.unlink(missing_ok=True)
