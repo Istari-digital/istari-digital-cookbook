@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "part-search-spec.schema.json",
+  "title": "Part Search Spec",
+  "description": "Input specification for a parametric part search against the Nexar/Octopart API",
+  "type": "object",
+  "required": ["search", "parameters"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "search": {
+      "type": "object",
+      "required": ["category_id"],
+      "additionalProperties": false,
+      "properties": {
+        "q": {
+          "type": "string",
+          "description": "Keyword query string passed as the top-level search term (e.g. 'resistor', 'LM358')"
+        },
+        "category": {
+          "type": "string",
+          "description": "Human-readable category name (informational only, not sent to API)"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "Octopart/Nexar numeric category ID — required to scope the search"
+        },
+        "distributors": {
+          "type": "array",
+          "description": "Return only parts with at least one offer from any of these distributors. Use Nexar display names (e.g. 'Digi-Key') or numeric IDs (e.g. '459'). Results may include offers from other distributors too — filter client-side if needed.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of parts to return per page",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 10
+        },
+        "start": {
+          "type": "integer",
+          "description": "Pagination offset — index of the first result to return",
+          "minimum": 0,
+          "default": 0
+        },
+        "manufacturers": {
+          "type": "array",
+          "description": "Return only parts made by any of these manufacturers. Use Nexar display names (e.g. 'Yageo', 'Vishay').",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "in_stock": {
+          "type": "boolean",
+          "description": "If true, return only parts with stock > 0 at one or more of the specified distributors (or any distributor if none specified)"
+        },
+        "has_datasheet": {
+          "type": "boolean",
+          "description": "If true, return only parts that have at least one datasheet URL"
+        },
+        "lifecycle_status": {
+          "type": "array",
+          "description": "Return only parts with one of these lifecycle statuses. Omit to return all statuses. Common values: Active, NRND (Not Recommended for New Designs), Obsolete.",
+          "items": {
+            "type": "string",
+            "enum": ["Active", "NRND", "Obsolete", "Discontinued", "Unknown"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "sort": {
+          "type": "string",
+          "description": "Field to sort results by. Omit entirely to use Nexar's default relevance ranking. Explicit options: median_price_1, median_price_10, median_price_100, median_price_1000, best_datasheet, factory_lead_days."
+        },
+        "sort_direction": {
+          "type": "string",
+          "description": "Sort order. Only applies when sort is specified.",
+          "enum": ["asc", "desc"],
+          "default": "asc"
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Technical attribute filters. Keys must be valid Nexar attribute shortnames for the target category (e.g. 'resistance', 'tolerance', 'case_package'). All values must be strings — quote numeric values. Valid shortnames per category are documented in data/part-category-attributes.json.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "minProperties": 1
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Controls which field groups are requested in the API response. Each group maps to a set of GraphQL subfields in the client. Omit output entirely to request all groups.",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "specs",
+              "offers",
+              "datasheet",
+              "lifecycle",
+              "cad",
+              "compliance"
+            ]
+          },
+          "description": "Field groups to include. basic: mpn, name, description, manufacturer, category, image. specs: all parametric attributes (resistance, tolerance, etc). offers: distributor offers including SKU, inventory, MOQ, pack size, and full price-break ladder. datasheet: document URLs. lifecycle: active/NRND/obsolete status. cad: CAD model availability flags — ECAD symbol, footprint, 3D model (Enterprise only). compliance: RoHS and other compliance flags (higher tiers only)."
+        }
+      }
+    }
+  }
+}
