@@ -230,11 +230,30 @@ class IstariCapability(BaseModel):
             external_identifier=f"part-search-agent/{display_name}",
         )
 
+    def _get_produces_type_id(self) -> str:
+        """Look up the 'produces' relationship type ID for this Istari instance."""
+        try:
+            page = self._v3.list_revision_relationship_types(size=100)
+            for rt in (page.items or []):
+                name = (getattr(rt, "name", "") or "").lower()
+                if name in ("produces", "produce"):
+                    print(f"  [link] resolved 'produces' type id: {rt.id}")
+                    return rt.id
+            # Show available types if produces not found
+            names = [getattr(rt, "name", "?") for rt in (page.items or [])]
+            print(f"  [link] WARNING: 'produces' type not found. Available types: {names}")
+        except Exception as exc:
+            print(f"  [link] WARNING: could not list relationship types: {exc}")
+        # Fall back to the known demo instance UUID
+        fallback = "fea9bd01-81bc-4db4-9aff-289bdd9745c4"
+        print(f"  [link] using fallback type id: {fallback}")
+        return fallback
+
     def link_resources(self, from_revision_id: str, to_revision_id: str) -> None:
-        PRODUCES_TYPE_ID = "fea9bd01-81bc-4db4-9aff-289bdd9745c4"
+        produces_type_id = self._get_produces_type_id()
         self._v3.create_revision_relationship(
             NewRevisionRelationshipDto(
-                relationship_type_id=PRODUCES_TYPE_ID,
+                relationship_type_id=produces_type_id,
                 left_revision_id=from_revision_id,
                 right_revision_id=to_revision_id,
             )
