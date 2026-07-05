@@ -19,9 +19,12 @@ Credentials (flags or environment variables):
   --istari-token    / ISTARI_REGISTRY_AUTH_TOKEN
 
 Usage:
-  python istari_part_search_agent.py --requirements-id <UUID> --provider anthropic --api-key sk-ant-...
-  python istari_part_search_agent.py --requirements-id <UUID> --provider openai    --api-key sk-...
-  python istari_part_search_agent.py --requirements-id <UUID> --provider openai    --model gpt-4o-mini --dry-run
+  python istari_part_search_agent.py --model-id <UUID> --provider anthropic --api-key sk-ant-...
+  python istari_part_search_agent.py --model-id <UUID> --provider openai    --api-key sk-...
+  python istari_part_search_agent.py --model-id <UUID> --provider genesis   --api-key <JWT> --model gpt-4o
+  python istari_part_search_agent.py --model-id <UUID> --provider openai    --model gpt-4o-mini --dry-run
+
+The agent resolves the requirements.json artifact from the given Istari model automatically.
 """
 
 from __future__ import annotations
@@ -203,6 +206,52 @@ class IstariCapability(BaseModel):
         config = Configuration(registry_url=self.registry_url, registry_auth_token=self.pat)
         self._v3 = V3Client(config)
         self._v2 = Client(config)
+
+    def find_requirements_resource_id(self, model_id: str) -> str:
+        """
+        Given a model ID, find the resource ID of its requirements.json artifact.
+        Searches model artifacts for any file whose name contains 'requirements'
+        and ends with '.json'.
+        """
+        model = self._v2.get_model(model_id=model_id)
+        candidates = []
+        for artifact in (model.artifacts or []):
+            try:
+                fname = artifact.file.revision.name or ""
+            except Exception:
+                fname = ""
+            if "requirement" in fname.lower() and fname.lower().endswith(".json"):
+                resource_id = artifact.file.resource_id
+                if resource_id:
+                    candidates.append((fname, resource_id))
+
+        if not candidates:
+            # List artifact filenames to help the user debug
+            names = []
+            for artifact in (model.artifacts or []):
+                try:
+                    names.append(artifact.file.revision.name or "?")
+                except Exception:
+                    names.append("?")
+            raise ValueError(
+                f"No requirements.json artifact found on model '{model_id}'.\n"
+                f"Available artifact files: {names}"
+            )
+
+        if len(candidates) > 1:
+            names = [c[0] for c in candidates]
+            print(f"  [warn] Multiple requirements artifacts found: {names} — using '{candidates[0][0]}'")
+
+        fname, resource_id = candidates[0]
+        print(f"  [model] Found requirements artifact: '{fname}'  (resource_id={resource_id})")
+        return resource_id
+
+    def get_model_display_name(self, model_id: str) -> str | None:
+        try:
+            model = self._v2.get_model(model_id=model_id)
+            return model.file.revision.display_name or model.file.revision.name
+        except Exception:
+            return None
 
     def fetch_requirements(self, resource_id: str) -> list[RawRequirement]:
         resource = self._v3.get_resource(resource_id)
@@ -427,7 +476,7 @@ BATCH_SIZE = 20
 
 
 def run_pipeline(
-    requirements_id: str,
+    model_id: str,
     extract_agent: Agent,
     transform_agent: Agent,
     istari: IstariCapability,
@@ -436,7 +485,8 @@ def run_pipeline(
 ) -> list[PartSearchResult]:
 
     # ── Step 1: Fetch ─────────────────────────────────────────────────────────
-    print(f"\n[1/4] Downloading requirements.json (resource_id={requirements_id}) ...")
+    print(f"\n[1/4] Locating requirements.json for model {model_id} ...")
+    requirements_id = istari.find_requirements_resource_id(model_id)
     req_revision_id = istari.get_revision_id(requirements_id)
     all_reqs        = istari.fetch_requirements(requirements_id)
     actionable      = [r for r in all_reqs if r.is_actionable()]
@@ -519,6 +569,7 @@ def run_pipeline(
             print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
 
     summary = {
+        "model_id":              model_id,
         "requirements_source":   requirements_id,
         "requirements_revision": req_revision_id,
         "model":                 model_name,
@@ -572,15 +623,15 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--requirements-id", metavar="UUID", required=True,
-                   help="Istari resource ID of the requirements.json")
+    p.add_argument("--model-id", metavar="UUID", required=True,
+                   help="Istari model ID — the agent will find the requirements.json artifact on that model")
     p.add_argument("--provider", choices=["anthropic", "openai", "genesis"], default="anthropic",
                    help="LLM provider to use (default: anthropic)")
     p.add_argument("--api-key", default=None,
                    help="API key for the chosen provider "
                         "(overrides ANTHROPIC_API_KEY / OPENAI_API_KEY)")
     p.add_argument("--model", default=None,
-                   help="Model name (default: claude-opus-4-5 for anthropic, gpt-4o for openai)")
+                   help="LLM model name (default: claude-opus-4-5 for anthropic, gpt-4o for openai/genesis)")
     p.add_argument("--istari-url",   default=None,
                    help="e.g. https://fileservice-v2.demo.istari.app")
     p.add_argument("--istari-token", default=None, help="Istari Personal Access Token")
@@ -624,13 +675,13 @@ def main() -> None:
     print("Istari Part Search Agent")
     print("=" * 60)
     print(f"  Provider:     {args.provider}")
-    print(f"  Model:        {model_name}")
+    print(f"  LLM model:    {model_name}")
     print(f"  Istari:       {istari.registry_url}")
-    print(f"  Requirements: {args.requirements_id}")
+    print(f"  Istari model: {args.model_id}")
     print(f"  Dry run:      {args.dry_run}")
 
     run_pipeline(
-        requirements_id=args.requirements_id,
+        model_id=args.model_id,
         extract_agent=extract_agent,
         transform_agent=transform_agent,
         istari=istari,
