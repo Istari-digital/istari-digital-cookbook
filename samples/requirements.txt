@@ -1,0 +1,7 @@
+anthropic
+openai
+pydantic
+pydantic-ai
+streamlit
+rich
+istari-digital-client
