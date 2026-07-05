@@ -310,6 +310,28 @@ KEY RULES
 # Agent factory  —  provider-agnostic
 # ════════════════════════════════════════════════════════════════════════════
 
+def _make_openai_llm(model_name: str, api_key: str, base_url: str | None = None):
+    """Construct an OpenAI-compatible pydantic-ai model, handling v1 and v2 API differences.
+
+    pydantic-ai v1: OpenAIModel  + OpenAIProvider(api_key, base_url)
+    pydantic-ai v2: OpenAIChatModel + OpenAIChatCompatibleProvider(api_key, base_url)
+    """
+    try:
+        from pydantic_ai.models.openai import OpenAIModel as _Model
+        from pydantic_ai.providers.openai import OpenAIProvider as _Provider
+        kwargs: dict = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return _Model(model_name, provider=_Provider(**kwargs))
+    except ImportError:
+        from pydantic_ai.models.openai import OpenAIChatModel as _Model  # type: ignore[no-redef]
+        from pydantic_ai.models.openai import OpenAIChatCompatibleProvider as _Provider  # type: ignore[no-redef]
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return _Model(model_name, provider=_Provider(**kwargs))
+
+
 def build_agents(
     provider: str,
     api_key: str,
@@ -321,23 +343,22 @@ def build_agents(
     Supported providers: 'anthropic', 'openai', 'genesis'.
     """
     if provider == "anthropic":
-        from pydantic_ai.models.anthropic import AnthropicModel
-        from pydantic_ai.providers.anthropic import AnthropicProvider
-        llm = AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
+        try:
+            from pydantic_ai.models.anthropic import AnthropicModel as _Model
+        except ImportError:
+            from pydantic_ai.models.anthropic import AnthropicChatModel as _Model  # type: ignore[no-redef]
+        try:
+            from pydantic_ai.providers.anthropic import AnthropicProvider as _Provider
+        except ImportError:
+            from pydantic_ai.providers.anthropic import AnthropicChatProvider as _Provider  # type: ignore[no-redef]
+        llm = _Model(model_name, provider=_Provider(api_key=api_key))
 
     elif provider == "openai":
-        from pydantic_ai.models.openai import OpenAIModel
-        from pydantic_ai.providers.openai import OpenAIProvider
-        llm = OpenAIModel(model_name, provider=OpenAIProvider(api_key=api_key))
+        llm = _make_openai_llm(model_name, api_key)
 
     elif provider == "genesis":
         # AI Genesis Factory — OpenAI-compatible endpoint hosted by Lockheed Martin
-        from pydantic_ai.models.openai import OpenAIModel
-        from pydantic_ai.providers.openai import OpenAIProvider
-        llm = OpenAIModel(
-            model_name,
-            provider=OpenAIProvider(api_key=api_key, base_url=GENESIS_BASE_URL),
-        )
+        llm = _make_openai_llm(model_name, api_key, base_url=GENESIS_BASE_URL)
 
     else:
         raise ValueError(f"Unknown provider '{provider}'. Choose 'anthropic', 'openai', or 'genesis'.")
