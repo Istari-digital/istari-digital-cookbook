@@ -95,8 +95,8 @@ def parse_args():
 
     # --- Job execution ---
     job = parser.add_argument_group("Job execution")
-    job.add_argument("--tool-version", default="2022x Refresh2", help="Cameo version (default: '2022x Refresh2')")
-    job.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
+    job.add_argument("--tool-version", default=None, help="Cameo version (e.g. '2024x'). Omit to let platform pick.")
+    job.add_argument("--os", default=None, help="Target agent OS (e.g. 'Windows 11'). Omit to let platform pick.")
     job.add_argument("--poll-interval", type=int, default=10, help="Seconds between status polls (default: 10)")
     job.add_argument("--timeout", type=int, default=3600, help="Max wait seconds (default: 3600)")
     job.add_argument(
@@ -198,8 +198,8 @@ def submit_extract_job(client: Client, model_id: str, sources: list,
         model_id=model_id,
         function=function,
         tool_name="dassault_cameo",
-        tool_version=tool_version,
-        operating_system=operating_system,
+        tool_version=tool_version or None,
+        operating_system=operating_system or None,
         parameters=parameters if parameters else None,
         sources=sources if sources else None,
     )
