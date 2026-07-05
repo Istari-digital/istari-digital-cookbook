@@ -313,8 +313,8 @@ KEY RULES
 def _make_openai_llm(model_name: str, api_key: str, base_url: str | None = None):
     """Construct an OpenAI-compatible pydantic-ai model, handling v1 and v2 API differences.
 
-    pydantic-ai v1: OpenAIModel  + OpenAIProvider(api_key, base_url)
-    pydantic-ai v2: OpenAIChatModel + OpenAIChatCompatibleProvider(api_key, base_url)
+    pydantic-ai v1: OpenAIModel + OpenAIProvider(api_key, base_url)
+    pydantic-ai v2: OpenAIChatModel + AsyncOpenAI(api_key, base_url) passed as openai_client
     """
     try:
         from pydantic_ai.models.openai import OpenAIModel as _Model
@@ -324,12 +324,12 @@ def _make_openai_llm(model_name: str, api_key: str, base_url: str | None = None)
             kwargs["base_url"] = base_url
         return _Model(model_name, provider=_Provider(**kwargs))
     except ImportError:
-        from pydantic_ai.models.openai import OpenAIChatModel as _Model  # type: ignore[no-redef]
-        from pydantic_ai.models.openai import OpenAIChatCompatibleProvider as _Provider  # type: ignore[no-redef]
-        kwargs = {"api_key": api_key}
+        from openai import AsyncOpenAI
+        from pydantic_ai.models.openai import OpenAIChatModel  # type: ignore[no-redef]
+        client_kwargs: dict = {"api_key": api_key}
         if base_url:
-            kwargs["base_url"] = base_url
-        return _Model(model_name, provider=_Provider(**kwargs))
+            client_kwargs["base_url"] = base_url
+        return OpenAIChatModel(model_name, openai_client=AsyncOpenAI(**client_kwargs))
 
 
 def build_agents(
