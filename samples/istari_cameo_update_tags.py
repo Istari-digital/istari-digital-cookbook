@@ -132,8 +132,9 @@ def parse_args():
 
     # --- Job execution ---
     job = parser.add_argument_group("Job execution")
-    job.add_argument("--tool-version", default="2022x Refresh2", help="Cameo version (default: '2022x Refresh2')")
-    job.add_argument("--os", default="Windows 11", help="Target agent OS (default: 'Windows 11')")
+    job.add_argument("--tool-version", default=None, help="Cameo version (e.g. '2024x'). Omit to let platform pick.")
+    job.add_argument("--os", default=None, help="Target agent OS (e.g. 'Windows 11'). Omit to let platform pick.")
+    job.add_argument("--agent-id", default=None, help="Pin job to a specific agent ID")
     job.add_argument("--poll-interval", type=int, default=10, help="Seconds between status polls (default: 10)")
     job.add_argument("--timeout", type=int, default=3600, help="Max wait seconds (default: 3600)")
 
@@ -241,18 +242,22 @@ def resolve_model_twc(client: Client, args) -> tuple[str, list]:
 
 
 def submit_job(client: Client, model_id: str, updates: list[dict], sources: list,
-               tool_version: str, operating_system: str, twc_mode: bool):
+               tool_version: str, operating_system: str, twc_mode: bool,
+               assigned_agent_id: str | None = None):
     function = "@istari:twc_update_tags" if twc_mode else "@istari:update_tags"
     print(f"Submitting {function}  tool_version={tool_version!r}  os={operating_system!r}")
     print(f"  Targeting {len(updates)} element update(s)")
+    if assigned_agent_id:
+        print(f"  Pinned to agent: {assigned_agent_id}")
     job = client.add_job(
         model_id=model_id,
         function=function,
         tool_name="dassault_cameo",
-        tool_version=tool_version,
-        operating_system=operating_system,
+        tool_version=tool_version or None,
+        operating_system=operating_system or None,
         parameters={"updates": updates},
         sources=sources if sources else None,
+        assigned_agent_id=assigned_agent_id or None,
     )
     print(f"  Job created  id={job.id}")
     return job
@@ -324,7 +329,7 @@ def main():
     else:
         model_id, sources = resolve_model_local(client, args)
 
-    job = submit_job(client, model_id, updates, sources, args.tool_version, args.os, args.twc)
+    job = submit_job(client, model_id, updates, sources, args.tool_version, args.os, args.twc, args.agent_id)
     completed_job = wait_for_job(client, job.id, args.poll_interval, args.timeout)
     print_job_result(completed_job, args.twc)
 
