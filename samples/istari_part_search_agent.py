@@ -476,17 +476,22 @@ BATCH_SIZE = 20
 
 
 def run_pipeline(
-    model_id: str,
     extract_agent: Agent,
     transform_agent: Agent,
     istari: IstariCapability,
     model_name: str,
     dry_run: bool = False,
+    model_id: str | None = None,
+    requirements_id: str | None = None,
 ) -> list[PartSearchResult]:
 
     # ── Step 1: Fetch ─────────────────────────────────────────────────────────
-    print(f"\n[1/4] Locating requirements.json for model {model_id} ...")
-    requirements_id = istari.find_requirements_resource_id(model_id)
+    if requirements_id:
+        print(f"\n[1/4] Downloading requirements.json (resource_id={requirements_id}) ...")
+        model_id = model_id or "N/A"
+    else:
+        print(f"\n[1/4] Locating requirements.json for model {model_id} ...")
+        requirements_id = istari.find_requirements_resource_id(model_id)
     req_revision_id = istari.get_revision_id(requirements_id)
     all_reqs        = istari.fetch_requirements(requirements_id)
     actionable      = [r for r in all_reqs if r.is_actionable()]
@@ -569,7 +574,7 @@ def run_pipeline(
             print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
 
     summary = {
-        "model_id":              model_id,
+        **({"model_id": model_id} if model_id and model_id != "N/A" else {}),
         "requirements_source":   requirements_id,
         "requirements_revision": req_revision_id,
         "model":                 model_name,
@@ -623,8 +628,11 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--model-id", metavar="UUID", required=True,
-                   help="Istari model ID — the agent will find the requirements.json artifact on that model")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--model-id", metavar="UUID",
+                     help="Istari model ID — the agent finds the requirements.json artifact automatically")
+    src.add_argument("--requirements-id", metavar="UUID",
+                     help="Istari resource ID of the requirements.json (use instead of --model-id)")
     p.add_argument("--provider", choices=["anthropic", "openai", "genesis"], default="anthropic",
                    help="LLM provider to use (default: anthropic)")
     p.add_argument("--api-key", default=None,
@@ -674,19 +682,23 @@ def main() -> None:
 
     print("Istari Part Search Agent")
     print("=" * 60)
-    print(f"  Provider:     {args.provider}")
-    print(f"  LLM model:    {model_name}")
-    print(f"  Istari:       {istari.registry_url}")
-    print(f"  Istari model: {args.model_id}")
-    print(f"  Dry run:      {args.dry_run}")
+    print(f"  Provider:        {args.provider}")
+    print(f"  LLM model:       {model_name}")
+    print(f"  Istari:          {istari.registry_url}")
+    if args.model_id:
+        print(f"  Istari model:    {args.model_id}")
+    else:
+        print(f"  Requirements ID: {args.requirements_id}")
+    print(f"  Dry run:         {args.dry_run}")
 
     run_pipeline(
-        model_id=args.model_id,
         extract_agent=extract_agent,
         transform_agent=transform_agent,
         istari=istari,
         model_name=model_name,
         dry_run=args.dry_run,
+        model_id=args.model_id,
+        requirements_id=args.requirements_id,
     )
 
 
