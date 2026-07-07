@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`BranchView`** — wraps a snapshot tag (branch); `list_revisions()`, `download_resources()`.
+- **`SystemView.branches()` / `get_branch()` / `find_branch()`** — list and resolve branches (snapshot tags), not configurations.
+- **`BranchDownloadResult`** and branch download helpers — download file revisions at a branch HEAD: single file when there is one revision, `.zip` when there are several.
+- **`SystemView.download_resources(branch)`**, **`IstariPlatform.get_system_by_id()`**, **`IstariPlatform.download_system_resources(system_id, branch)`**.
+
 ### Changed
+
+- **Branch downloads** — use the SDK branching API (`get_branch`, `list_branch_revisions`) instead of configuration tracked-file listings.
 
 - **`UserView.tools()`** — now returns tools this **user** may execute (permissions API), including when resolved via `get_user(email)`. Use `platform.tools()` for the full org catalog visible to your token.
 

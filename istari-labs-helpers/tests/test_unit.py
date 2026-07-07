@@ -805,6 +805,129 @@ class TestIstariPlatform:
         _v3.assert_called_once()
 
 
+class TestBranchDownload:
+    def _make_system(self, mock_client):
+        system = MagicMock()
+        system.id = "sys-1"
+        system.name = "Demo System"
+        system.configurations = []
+        system.client = mock_client
+        return system
+
+    def test_branches_lists_baseline_and_user_branches(self):
+        from istari_labs_helpers import BranchView
+
+        baseline = MagicMock()
+        baseline.tag = "baseline"
+        baseline.is_baseline = True
+        baseline.snapshot_id = "snap-b"
+        baseline.id = "tag-b"
+
+        main = MagicMock()
+        main.tag = "main"
+        main.is_baseline = False
+        main.snapshot_id = "snap-m"
+        main.id = "tag-m"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(side_effect=lambda name: baseline if name == "baseline" else main)
+        system.list_branches = MagicMock(return_value=[main])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        views = SystemView(_system=system, _client=mock_client).branches()
+        assert len(views) == 2
+        assert all(isinstance(v, BranchView) for v in views)
+        assert views[0].name == "baseline"
+        assert views[1].name == "main"
+
+    def test_download_single_revision_writes_file(self, tmp_path):
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-1", id="tag-1")
+        item = MagicMock()
+        item.name = "wing.mdzip"
+        item.display_name = "Wing"
+        item.extension = None
+        item.revision_id = "rev-1"
+        item.read_bytes.return_value = b"MODEL"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system.list_branch_revisions = MagicMock(return_value=[item])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path
+        )
+
+        assert isinstance(result, BranchDownloadResult)
+        assert result.file_count == 1
+        assert result.is_zip is False
+        assert result.members == ("wing.mdzip",)
+        assert result.path.read_bytes() == b"MODEL"
+
+    def test_download_multiple_revisions_writes_zip(self, tmp_path):
+        import zipfile
+
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-2", id="tag-2")
+
+        def make_item(name, content):
+            item = MagicMock()
+            item.name = name
+            item.display_name = name
+            item.extension = None
+            item.revision_id = f"rev-{name}"
+            item.read_bytes.return_value = content
+            return item
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system.list_branch_revisions = MagicMock(
+            return_value=[make_item("a.json", b"A"), make_item("b.json", b"B")]
+        )
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "main", dest=tmp_path / "bundle.zip"
+        )
+
+        assert result.is_zip is True
+        assert result.file_count == 2
+        with zipfile.ZipFile(result.path) as zf:
+            assert sorted(zf.namelist()) == ["a.json", "b.json"]
+
+    def test_download_system_resources_by_id(self, tmp_path):
+        from istari_labs_helpers import IstariPlatform
+
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-3", id="tag-3")
+        item = MagicMock()
+        item.name = "only.catpart"
+        item.display_name = "Only"
+        item.extension = None
+        item.revision_id = "rev-1"
+        item.read_bytes.return_value = b"X"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system.list_branch_revisions = MagicMock(return_value=[item])
+        mock_client.get_system.return_value = system
+
+        result = IstariPlatform(mock_client).download_system_resources(
+            "sys-1", "main", dest=tmp_path
+        )
+        assert result.file_count == 1
+        assert result.path.name == "only.catpart"
+
+
 class TestItemQuery:
     """Behaviour of the generic ItemQuery wrapper (queries.py)."""
 

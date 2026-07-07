@@ -12,6 +12,9 @@ Entity hierarchy
       +-- SystemView         (wraps System)
       |     +-- .baseline              -> SnapshotView
       |     +-- .configurations        -> list[ConfigurationView]
+      |     +-- .branches()            -> list[BranchView]  (snapshot tags)
+      |     +-- .get_branch()          -> BranchView
+      |     +-- .download_resources()  -> BranchDownloadResult (file or zip)
       |     +-- .add_file / .add_revision
       +-- SnapshotView        (wraps Snapshot)
       |     +-- .configuration         -> ConfigurationView
@@ -116,6 +119,7 @@ import ssl
 import tempfile
 import sys
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -156,6 +160,108 @@ def _paginate_manually(
             break
         page += 1
     return items
+
+
+@dataclass(frozen=True)
+class BranchDownloadResult:
+    """Result of downloading file revisions tracked on a system branch (snapshot tag)."""
+
+    path: Path
+    file_count: int
+    is_zip: bool
+    members: tuple[str, ...]
+
+
+def _member_name_for_branch_revision(item: Any) -> str:
+    """Choose a zip/archive member name for a branch revision row."""
+    if item.name:
+        return item.name
+    if item.display_name:
+        base = item.display_name
+        ext = getattr(item, "extension", None)
+        if ext:
+            suffix = ext if str(ext).startswith(".") else f".{ext}"
+            if not base.endswith(suffix):
+                return base + suffix
+        return base
+    return item.revision_id
+
+
+def _wire_client(client: IstariClient, obj: Any) -> Any:
+    """Attach *client* to SDK models that use ``ClientHaving``."""
+    if getattr(obj, "client", None) is None:
+        obj.client = client
+    return obj
+
+
+def _entries_for_branch(system: System, branch_name: str, client: IstariClient) -> list[tuple[str, bytes]]:
+    """Collect ``(filename, bytes)`` for every revision on a branch snapshot tag."""
+    _wire_client(client, system)
+    branch = system.get_branch(branch_name)
+    entries: list[tuple[str, bytes]] = []
+    for item in system.list_branch_revisions(branch):
+        _wire_client(client, item)
+        name = _member_name_for_branch_revision(item)
+        content = item.read_bytes()
+        entries.append((name, content))
+    return entries
+
+
+def _disambiguate_member_names(names: list[str]) -> list[str]:
+    """Ensure archive member names are unique (append ``_2``, ``_3``, … before suffix)."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen[name] = 1
+            out.append(name)
+            continue
+        seen[name] += 1
+        stem = Path(name)
+        candidate = f"{stem.stem}_{seen[name]}{stem.suffix}"
+        while candidate in seen:
+            seen[name] += 1
+            candidate = f"{stem.stem}_{seen[name]}{stem.suffix}"
+        seen[candidate] = 1
+        out.append(candidate)
+    return out
+
+
+def _write_branch_download(
+    entries: list[tuple[str, bytes]],
+    *,
+    dest: Path | None,
+    default_stem: str,
+) -> BranchDownloadResult:
+    """Write one file or a zip depending on *entries* length."""
+    if not entries:
+        raise ValueError("No tracked resources to download")
+
+    names = _disambiguate_member_names([n for n, _ in entries])
+    entries = list(zip(names, [b for _, b in entries], strict=True))
+
+    if len(entries) == 1:
+        name, content = entries[0]
+        out = dest or Path.cwd() / name
+        if out.is_dir():
+            out = out / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(content)
+        return BranchDownloadResult(path=out, file_count=1, is_zip=False, members=(name,))
+
+    archive = dest or Path.cwd() / f"{default_stem}.zip"
+    if archive.is_dir():
+        archive = archive / f"{default_stem}.zip"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in entries:
+            zf.writestr(name, content)
+    return BranchDownloadResult(
+        path=archive,
+        file_count=len(entries),
+        is_zip=True,
+        members=tuple(n for n, _ in entries),
+    )
 
 
 def _v2_resource_class_name_for_get(resource_type: Any) -> str:
@@ -1742,10 +1848,7 @@ class ConfigurationView:
         self._client.update_tag(baseline.tag_id, UpdateTag(snapshot_id=snapshot.id))
         return self
 
-
-# ---------------------------------------------------------------------------
-# SnapshotView
-# ---------------------------------------------------------------------------
+    # -- mutations ----------------------------------------------------------
 
 @dataclass
 class SnapshotView:
@@ -1783,6 +1886,60 @@ class SnapshotView:
         if match is None:
             raise ValueError(f"Configuration {cfg_id} not in system")
         return ConfigurationView(_config=match, _client=self._client)
+
+
+# ---------------------------------------------------------------------------
+# BranchView  —  snapshot tag (branch) on a system
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BranchView:
+    """Fluent wrapper around a :class:`~istari_digital_client.v2.models.snapshot_tag.SnapshotTag`.
+
+    Branches are snapshot tags on a system — ``baseline``, ``main``, feature
+    branches, and so on.  Use :meth:`list_revisions` to see file revisions at
+    the branch HEAD, and :meth:`download_resources` to export them locally.
+    """
+
+    _tag: Any = field(repr=False)
+    _system: System = field(repr=False)
+    _client: IstariClient = field(repr=False)
+
+    def __repr__(self) -> str:
+        kind = "baseline" if self.is_baseline else "branch"
+        return f"Branch({self.name!r}, {kind}, snapshot={self.snapshot_id})"
+
+    @property
+    def id(self) -> str:
+        return self._tag.id
+
+    @property
+    def name(self) -> str:
+        return self._tag.tag
+
+    @property
+    def is_baseline(self) -> bool:
+        return self._tag.is_baseline
+
+    @property
+    def snapshot_id(self) -> str:
+        return self._tag.snapshot_id
+
+    @property
+    def raw(self) -> Any:
+        return self._tag
+
+    def list_revisions(self) -> list[Any]:
+        """File revisions tracked at this branch's current snapshot."""
+        _wire_client(self._client, self._system)
+        items = self._system.list_branch_revisions(self._tag)
+        return [_wire_client(self._client, item) for item in items]
+
+    def download_resources(self, dest: str | Path | None = None) -> BranchDownloadResult:
+        """Download every revision on this branch (single file or zip)."""
+        entries = _entries_for_branch(self._system, self.name, self._client)
+        stem = f"{self._system.name}_{self.name}".replace(" ", "_")
+        return _write_branch_download(entries, dest=Path(dest) if dest else None, default_stem=stem)
 
 
 # ---------------------------------------------------------------------------
@@ -1825,8 +1982,64 @@ class SystemView:
 
     @property
     def configurations(self) -> list[ConfigurationView]:
-        """All configurations on this system."""
+        """All configurations on this system (version history — not branches)."""
         return [ConfigurationView(_config=c, _client=self._client) for c in self._system.configurations or []]
+
+    def _system_with_client(self) -> System:
+        """Return the wrapped ``System`` with the SDK client attached."""
+        return _wire_client(self._client, self._system)
+
+    def branches(self) -> list[BranchView]:
+        """All branches on this system (snapshot tags), including ``baseline``.
+
+            for branch in system.branches():
+                print(branch.name, len(branch.list_revisions()))
+        """
+        s = self._system_with_client()
+        tags = [s.get_branch("baseline"), *s.list_branches()]
+        return [BranchView(_tag=t, _system=s, _client=self._client) for t in tags]
+
+    def get_branch(self, name: str) -> BranchView:
+        """Look up a branch (snapshot tag) by name."""
+        s = self._system_with_client()
+        return BranchView(_tag=s.get_branch(name), _system=s, _client=self._client)
+
+    def find_branch(self, name: str) -> BranchView | None:
+        """Look up a branch by name or return ``None``."""
+        try:
+            return self.get_branch(name)
+        except ValueError:
+            return None
+
+    def download_resources(
+        self,
+        branch: str,
+        dest: str | Path | None = None,
+    ) -> BranchDownloadResult:
+        """Download all file revisions on *branch* (snapshot tag name).
+
+            result = system.download_resources("baseline", dest="./exports")
+        """
+        return self.get_branch(branch).download_resources(dest)
+
+    def find_configuration(self, name: str) -> ConfigurationView | None:
+        """Find a configuration by name, or ``None``."""
+        needle = name.casefold()
+        for cfg in self.configurations:
+            if cfg.name.casefold() == needle:
+                return cfg
+        return None
+
+    def get_configuration(self, name: str) -> ConfigurationView:
+        """Find a configuration by name or raise ``LookupError``."""
+        match = self.find_configuration(name)
+        if match is None:
+            names = [c.name for c in self.configurations]
+            raise LookupError(
+                f"Configuration {name!r} not found on system {self.name!r}. "
+                f"Available: {names or '(none)'}"
+            )
+        return match
 
     # -- mutations ----------------------------------------------------------
 
@@ -2089,6 +2302,31 @@ class IstariPlatform:
             if s.name == name:
                 return SystemView(_system=s, _client=self._client)
         return None
+
+    def get_system_by_id(self, system_id: str) -> SystemView:
+        """Load a system by id."""
+        system = self._client.get_system(system_id)
+        return SystemView(_system=system, _client=self._client)
+
+    def download_system_resources(
+        self,
+        system_id: str,
+        branch: str,
+        dest: str | Path | None = None,
+    ) -> BranchDownloadResult:
+        """Download all file revisions on a system branch (snapshot tag).
+
+        Writes a **single file** when the branch has one revision,
+        otherwise a **zip** archive.
+
+            result = platform.download_system_resources(
+                "92f95bf5-6c46-4e8d-a1e9-1cda4dd7eb3a",
+                "UAV Sizing Study",
+                dest="./exports",
+            )
+            print(result.path)
+        """
+        return self.get_system_by_id(system_id).download_resources(branch, dest=dest)
 
     def get_or_create_system(
         self,

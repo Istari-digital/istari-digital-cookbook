@@ -58,6 +58,11 @@ IstariPlatform                (entry point)
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
   |     +-- .configurations          -> list[ConfigurationView]
+  |     +-- .branches() / .get_branch()  -> BranchView (snapshot tags)
+  |     +-- .download_resources()    -> BranchDownloadResult
+  +-- BranchView              (wraps SnapshotTag — a branch)
+  |     +-- .list_revisions()        -> list[SnapshotRevisionSearchItem]
+  |     +-- .download_resources()    -> BranchDownloadResult
   +-- SnapshotView            (wraps Snapshot)
   |     +-- .configuration           -> ConfigurationView
   +-- ConfigurationView       (wraps SystemConfiguration)
@@ -273,6 +278,30 @@ model.get_lineage().print_tree()
 system = platform.get_system("Berserker")
 for cfg in system.configurations:
     print(cfg.name, cfg.id)
+```
+
+### List branches on a system
+
+```python
+system = platform.get_system("Berserker")
+for branch in system.branches():
+    print(branch.name, len(branch.list_revisions()))
+```
+
+### Download all resources on a branch
+
+```python
+# Single file when one revision at branch HEAD; .zip when several
+result = platform.download_system_resources(
+    system.id,
+    "baseline",
+    dest="./exports",
+)
+print(result.path, result.is_zip, result.members)
+
+# Or via SystemView
+result = system.download_resources("baseline", dest="./exports")
+result = system.get_branch("baseline").download_resources("./exports")
 ```
 
 ### Find a model in a configuration
