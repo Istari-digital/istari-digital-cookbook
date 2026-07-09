@@ -113,6 +113,8 @@ class ExtractedRequirements(BaseModel):
     skipped_ids: list[str]
 
 
+# ── Nexar / Octopart models ───────────────────────────────────────────────────
+
 OutputGroup = Literal["basic", "specs", "offers", "datasheet", "lifecycle", "cad", "compliance"]
 
 
@@ -170,6 +172,54 @@ class PartSearchResult(BaseModel):
     source_req_id: str
     priority:      Literal["critical", "high", "medium", "low"] = "medium"
     part_search:   PartSearchSpec
+
+
+# ── SiliconExpert models ──────────────────────────────────────────────────────
+
+class SEFilter(BaseModel):
+    name:  str = Field(description="SiliconExpert attribute name, e.g. 'Resistance', 'Voltage Rating'")
+    value: str = Field(description="Attribute value as a string with units, e.g. '4.7 kOhm', '50 V'")
+
+
+class SEPartSearchSpec(BaseModel):
+    """Matches the SiliconExpert ProductAPI request body schema directly."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    category:      str = Field(description="SiliconExpert taxonomy category name — required")
+    keyword:       str | None = None
+    manufacturer:  str | None = None
+    filters:       list[SEFilter] = Field(
+        min_length=1,
+        description=(
+            "Parametric attribute filters as [{name, value}] pairs. "
+            "Use SiliconExpert attribute names exactly: 'Resistance', 'Capacitance', "
+            "'Inductance', 'Tolerance', 'Voltage Rating', 'Current Rating', "
+            "'Power Rating', 'Case/Package', 'Temperature Coefficient', 'Dielectric', "
+            "'Mounting Style', 'Frequency', 'Forward Voltage', 'Output Current', "
+            "'Supply Voltage Min', 'Supply Voltage Max', 'Number of Pins', "
+            "'Operating Temperature Min', 'Operating Temperature Max'. "
+            "All values must be strings with units where applicable."
+        ),
+    )
+    lifecycle:      list[Literal["Active","NRND","EOL","Obsolete","Unknown"]] | None = Field(default=None, min_length=1)
+    rohsCompliant:  bool | None = None
+    reachCompliant: bool | None = None
+    pageSize:       int | None = Field(default=None, ge=1, le=100)
+    pageNumber:     int | None = Field(default=None, ge=1)
+    fields:         list[Literal["lifecycle","compliance","parametrics","pricing","alternates","pcn","environmental"]] | None = None
+
+    @field_validator("category")
+    @classmethod
+    def _category_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("category must not be empty")
+        return v
+
+
+class SEPartSearchResult(BaseModel):
+    source_req_id: str
+    priority:      Literal["critical", "high", "medium", "low"] = "medium"
+    part_search:   SEPartSearchSpec
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -313,7 +363,17 @@ class IstariCapability(BaseModel):
 # Schema loader
 # ════════════════════════════════════════════════════════════════════════════
 
-def load_schema(path: Path = HERE / "part-search-spec.schema.json") -> str:
+SCHEMA_FILES = {
+    "nexar":         "part-search-spec.schema.json",
+    "siliconexpert": "se-part-search-spec.schema.json",
+}
+
+
+def load_schema(search_api: str = "nexar") -> str:
+    fname = SCHEMA_FILES.get(search_api)
+    if not fname:
+        raise ValueError(f"Unknown search_api '{search_api}'. Choose 'nexar' or 'siliconexpert'.")
+    path = HERE / fname
     if not path.exists():
         raise FileNotFoundError(f"Schema file not found: {path}")
     return json.dumps(json.loads(path.read_text()), indent=2)
@@ -338,7 +398,55 @@ Rules:
 - Preserve original requirement IDs exactly."""
 
 
-def build_transform_prompt(schema_text: str) -> str:
+def build_transform_prompt(schema_text: str, search_api: str = "nexar") -> str:
+    if search_api == "siliconexpert":
+        return f"""You are a procurement engineer converting engineering requirements into
+structured part-search specs for the SiliconExpert ProductAPI.
+
+OUTPUT SCHEMA
+-------------
+Every part_search you produce must conform to this JSON Schema:
+
+{schema_text}
+
+KEY RULES
+---------
+- part_search.category is REQUIRED. Use exact SiliconExpert taxonomy strings:
+    Resistors - Fixed              Resistors - Variable (Potentiometers)
+    Capacitors - Ceramic (MLCC)    Capacitors - Aluminum Electrolytic
+    Capacitors - Tantalum          Capacitors - Film
+    Inductors - Fixed              Inductors - Chokes & Filters
+    Transistors - MOSFET           Transistors - Bipolar (BJT)
+    Diodes - General Purpose       Diodes - Zener
+    Diodes - Schottky              Diodes - Bridge Rectifiers
+    Integrated Circuits - Op Amps              Integrated Circuits - Microcontrollers
+    Integrated Circuits - Voltage Regulators (Linear)
+    Integrated Circuits - Voltage Regulators (Switching)
+    Integrated Circuits - Logic Gates          Integrated Circuits - Motor Drivers
+    Connectors - PCB               Connectors - USB
+    Crystals & Oscillators         Fuses & Circuit Breakers
+    LEDs - Standard                Switches - Tactile
+
+- part_search.filters: REQUIRED, min 1 entry. A list of {{name, value}} objects.
+  Use SiliconExpert attribute names exactly (title-case, spaces):
+    "Resistance"          "Capacitance"        "Inductance"
+    "Tolerance"           "Voltage Rating"     "Current Rating"
+    "Power Rating"        "Case/Package"       "Temperature Coefficient"
+    "Dielectric"          "Mounting Style"     "Frequency"
+    "Forward Voltage"     "Output Current"     "Supply Voltage Min"
+    "Supply Voltage Max"  "Number of Pins"     "Operating Temperature Min"
+    "Operating Temperature Max"
+  All values must be strings with units where applicable.
+  Example: [{{"name": "Resistance", "value": "4.7 kOhm"}}, {{"name": "Tolerance", "value": "1%"}}]
+
+- part_search.lifecycle: ["Active"] by default.
+- part_search.rohsCompliant: true for all electronic components by default.
+- part_search.pageSize: 10 by default.
+- part_search.fields: ["lifecycle", "compliance", "parametrics"] always.
+- source_req_id: preserve exactly.
+- priority: default "medium"; safety-critical → "critical"."""
+
+    # Default: Nexar/Octopart
     return f"""You are a procurement engineer converting engineering requirements into
 structured part-search specs conforming to the Nexar/Octopart part-search-spec schema.
 
@@ -403,10 +511,12 @@ def build_agents(
     api_key: str,
     model_name: str,
     schema_text: str,
+    search_api: str = "nexar",
 ) -> tuple[Agent, Agent]:
     """
     Build the two pydantic-ai Agents for the requested provider.
     Supported providers: 'anthropic', 'openai', 'genesis'.
+    Supported search_api: 'nexar', 'siliconexpert'.
     """
     if provider == "anthropic":
         try:
@@ -429,6 +539,10 @@ def build_agents(
     else:
         raise ValueError(f"Unknown provider '{provider}'. Choose 'anthropic', 'openai', or 'genesis'.")
 
+    transform_output_type = (
+        list[SEPartSearchResult] if search_api == "siliconexpert" else list[PartSearchResult]
+    )
+
     extract_agent: Agent = Agent(
         llm,
         output_type=ExtractedRequirements,
@@ -437,8 +551,8 @@ def build_agents(
 
     transform_agent: Agent = Agent(
         llm,
-        output_type=list[PartSearchResult],
-        system_prompt=build_transform_prompt(schema_text),
+        output_type=transform_output_type,
+        system_prompt=build_transform_prompt(schema_text, search_api),
     )
 
     return extract_agent, transform_agent
@@ -460,8 +574,8 @@ def classify_requirements(
 def transform_requirements(
     typed_requirements: list[str],
     agent: Agent,
-) -> list[PartSearchResult]:
-    """Stage 3 — map typed requirements to PartSearchResult via pydantic-ai transform_agent."""
+) -> list:
+    """Stage 3 — map typed requirements to PartSearchResult (or SEPartSearchResult) via transform_agent."""
     return agent.run_sync(
         "Convert each requirement to a PartSearchResult:\n\n"
         + "\n".join(typed_requirements)
@@ -483,7 +597,8 @@ def run_pipeline(
     dry_run: bool = False,
     model_id: str | None = None,
     requirements_id: str | None = None,
-) -> list[PartSearchResult]:
+    search_api: str = "nexar",
+) -> list:
 
     # ── Step 1: Fetch ─────────────────────────────────────────────────────────
     if requirements_id:
@@ -524,8 +639,9 @@ def run_pipeline(
         return []
 
     # ── Step 3: Transform ─────────────────────────────────────────────────────
-    print(f"\n[3/4] Transforming to part-search specs ({model_name}) ...")
-    results: list[PartSearchResult] = []
+    api_label = "SiliconExpert" if search_api == "siliconexpert" else "Nexar/Octopart"
+    print(f"\n[3/4] Transforming to {api_label} part-search specs ({model_name}) ...")
+    results: list = []
     batches = [all_typed[i:i+BATCH_SIZE] for i in range(0, len(all_typed), BATCH_SIZE)]
 
     for i, batch in enumerate(batches, 1):
@@ -534,8 +650,13 @@ def run_pipeline(
 
     print(f"      ✓ {len(results)} specs generated")
     for r in results:
-        print(f"      [{r.source_req_id}] category_id={r.part_search.search.category_id}  "
-              f"params={list(r.part_search.parameters.keys())}  ({r.priority})")
+        if search_api == "siliconexpert":
+            filter_names = [f.name for f in r.part_search.filters]
+            print(f"      [{r.source_req_id}] category='{r.part_search.category}'  "
+                  f"filters={filter_names}  ({r.priority})")
+        else:
+            print(f"      [{r.source_req_id}] category_id={r.part_search.search.category_id}  "
+                  f"params={list(r.part_search.parameters.keys())}  ({r.priority})")
 
     # ── Step 4: Upload + link ─────────────────────────────────────────────────
     print(f"\n[4/4] Uploading results to Istari and linking to requirements ...")
@@ -544,12 +665,19 @@ def run_pipeline(
     local_out.mkdir(exist_ok=True)
     uploaded: list[dict] = []
 
+    schema_ref = (
+        "./se-part-search-spec.schema.json"
+        if search_api == "siliconexpert"
+        else "./part-search-spec.schema.json"
+    )
+    file_suffix = "_se_part_search.json" if search_api == "siliconexpert" else "_part_search.json"
+
     for r in results:
         spec_data = {
-            "$schema": "./part-search-spec.schema.json",
+            "$schema": schema_ref,
             **r.part_search.model_dump(exclude_none=True),
         }
-        fname = f"{r.source_req_id}_part_search.json"
+        fname = f"{r.source_req_id}{file_suffix}"
         (local_out / fname).write_text(json.dumps(spec_data, indent=2))
 
         if dry_run:
@@ -643,6 +771,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--istari-url",   default=None,
                    help="e.g. https://fileservice-v2.demo.istari.app")
     p.add_argument("--istari-token", default=None, help="Istari Personal Access Token")
+    p.add_argument("--search-api", choices=["nexar", "siliconexpert"], default="nexar",
+                   help="Part search API format for output (default: nexar)")
     p.add_argument("--dry-run", action="store_true",
                    help="Classify and transform but write locally only, no Istari upload")
     return p.parse_args()
@@ -672,18 +802,22 @@ def main() -> None:
             print(f"ERROR: missing {k}", file=sys.stderr)
         sys.exit(1)
 
-    schema_text = load_schema()
+    schema_text = load_schema(args.search_api)
 
     # Validate Istari credentials via Pydantic before any API calls
     istari = IstariCapability(registry_url=istari_url, pat=istari_token)
 
     # Build provider-specific pydantic-ai agents
-    extract_agent, transform_agent = build_agents(args.provider, api_key, model_name, schema_text)
+    extract_agent, transform_agent = build_agents(
+        args.provider, api_key, model_name, schema_text, args.search_api
+    )
 
+    api_label = "SiliconExpert" if args.search_api == "siliconexpert" else "Nexar/Octopart"
     print("Istari Part Search Agent")
     print("=" * 60)
     print(f"  Provider:        {args.provider}")
     print(f"  LLM model:       {model_name}")
+    print(f"  Search API:      {api_label}")
     print(f"  Istari:          {istari.registry_url}")
     if args.model_id:
         print(f"  Istari model:    {args.model_id}")
@@ -699,6 +833,7 @@ def main() -> None:
         dry_run=args.dry_run,
         model_id=args.model_id,
         requirements_id=args.requirements_id,
+        search_api=args.search_api,
     )
 
 
