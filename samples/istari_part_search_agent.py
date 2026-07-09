@@ -773,15 +773,40 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--istari-token", default=None, help="Istari Personal Access Token")
     p.add_argument("--search-api", choices=["nexar", "siliconexpert"], default="nexar",
                    help="Part search API format for output (default: nexar)")
+    p.add_argument("--env-file", default=None, metavar="PATH",
+                   help="Path to a .env file with credentials (default: .env next to this script)")
     p.add_argument("--dry-run", action="store_true",
                    help="Classify and transform but write locally only, no Istari upload")
     return p.parse_args()
 
 
+def _load_env(env_file: str | None) -> None:
+    """Load a .env file into os.environ. CLI flags take priority (loaded before this)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        print("WARNING: python-dotenv not installed — .env file will not be loaded.", file=sys.stderr)
+        print("         Run: pip install python-dotenv", file=sys.stderr)
+        return
+
+    path = Path(env_file) if env_file else HERE / ".env"
+    if path.exists():
+        load_dotenv(dotenv_path=path, override=False)  # override=False: env vars already set win
+        print(f"  [config] Loaded credentials from {path}")
+    elif env_file:
+        # User explicitly asked for a file that doesn't exist — hard error
+        print(f"ERROR: .env file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> None:
     args = parse_args()
 
-    # Resolve API key: explicit flag → env var for chosen provider
+    # Load .env before resolving credentials so env vars from the file are available.
+    # Values already in the environment (or set via CLI flags stored in os.environ) take priority.
+    _load_env(args.env_file)
+
+    # Resolve API key: CLI flag → .env / environment variable for chosen provider
     env_key_name = {
         "anthropic": "ANTHROPIC_API_KEY",
         "openai":    "OPENAI_API_KEY",
