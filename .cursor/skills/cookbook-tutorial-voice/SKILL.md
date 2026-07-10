@@ -79,6 +79,7 @@ End with **Learn more** (doc links) and **Teardown (optional)** when the recipe 
 |-------|--------|
 | `dev` | `istari-digital-client`, `python-dotenv`, notebook/lint tooling — most recipes |
 | `advanced` | `pandas`, `jinja2`, `matplotlib`, `numpy`, `pytest`, `ipython` — workflow-logs recipes only |
+| `ai` | `anthropic`, `istari-labs-helpers`, `pdfplumber`, `openpyxl`, `python-docx` — AI-assisted validation recipes only |
 
 Document the exact `uv sync --group …` command in Prerequisites.
 

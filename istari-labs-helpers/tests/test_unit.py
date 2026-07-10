@@ -856,7 +856,8 @@ class TestBranchDownload:
         mock_client = MagicMock()
         system = self._make_system(mock_client)
         system.get_branch = MagicMock(return_value=branch_tag)
-        system.list_branch_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
 
         from istari_labs_helpers.istari_utils import SystemView
 
@@ -889,9 +890,10 @@ class TestBranchDownload:
         mock_client = MagicMock()
         system = self._make_system(mock_client)
         system.get_branch = MagicMock(return_value=branch_tag)
-        system.list_branch_revisions = MagicMock(
+        system._iter_snapshot_revisions = MagicMock(
             return_value=[make_item("a.json", b"A"), make_item("b.json", b"B")]
         )
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
 
         from istari_labs_helpers.istari_utils import SystemView
 
@@ -918,7 +920,8 @@ class TestBranchDownload:
         mock_client = MagicMock()
         system = self._make_system(mock_client)
         system.get_branch = MagicMock(return_value=branch_tag)
-        system.list_branch_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
         mock_client.get_system.return_value = system
 
         result = IstariPlatform(mock_client).download_system_resources(
@@ -926,6 +929,112 @@ class TestBranchDownload:
         )
         assert result.file_count == 1
         assert result.path.name == "only.catpart"
+
+    def test_branch_subsystems(self):
+        from istari_labs_helpers import SubsystemView
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-1", id="tag-1")
+        sub_item = MagicMock()
+        sub_item.system_id = "sub-1"
+        sub_item.system_name = "Wing"
+        sub_item.system_description = "Wing assembly"
+        sub_item.tag_id = "tag-sub"
+        sub_item.tagged_configuration_id = "cfg-sub"
+        sub_item.tagged_configuration_name = "v1"
+        sub_item.tagged_snapshot_id = "snap-sub"
+        sub_item.is_archived = False
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system.list_branch_subsystems = MagicMock(return_value=[sub_item])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        views = SystemView(_system=system, _client=mock_client).get_branch("baseline").subsystems()
+        assert len(views) == 1
+        assert isinstance(views[0], SubsystemView)
+        assert views[0].system_name == "Wing"
+        assert views[0].snapshot_id == "snap-sub"
+        system.list_branch_subsystems.assert_called_once_with(branch_tag)
+
+    def test_download_with_subsystem_depth(self, tmp_path):
+        import zipfile
+
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-root", id="tag-1")
+
+        root_item = MagicMock()
+        root_item.name = "root.json"
+        root_item.display_name = "root"
+        root_item.extension = None
+        root_item.revision_id = "rev-root"
+        root_item.read_bytes.return_value = b"ROOT"
+
+        sub_item = MagicMock()
+        sub_item.system_id = "sub-1"
+        sub_item.system_name = "Wing"
+        sub_item.tagged_snapshot_id = "snap-sub"
+
+        sub_file = MagicMock()
+        sub_file.name = "wing.json"
+        sub_file.display_name = "wing"
+        sub_file.extension = None
+        sub_file.revision_id = "rev-sub"
+        sub_file.read_bytes.return_value = b"WING"
+
+        sub_system = MagicMock()
+        sub_system.id = "sub-1"
+        sub_system.name = "Wing"
+        sub_system.configurations = []
+        sub_system.client = None
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[root_item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[sub_item])
+        sub_system._iter_snapshot_revisions = MagicMock(return_value=[sub_file])
+        sub_system._iter_snapshot_subsystems = MagicMock(return_value=[])
+        mock_client.get_system.return_value = sub_system
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path, depth=2
+        )
+
+        assert isinstance(result, BranchDownloadResult)
+        assert result.is_zip is True
+        assert result.file_count == 2
+        with zipfile.ZipFile(result.path) as zf:
+            assert sorted(zf.namelist()) == ["Wing/wing.json", "root.json"]
+            assert zf.read("root.json") == b"ROOT"
+            assert zf.read("Wing/wing.json") == b"WING"
+
+    def test_download_depth_one_skips_subsystems(self, tmp_path):
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-root", id="tag-1")
+
+        root_item = MagicMock()
+        root_item.name = "only.json"
+        root_item.display_name = "only"
+        root_item.extension = None
+        root_item.revision_id = "rev-root"
+        root_item.read_bytes.return_value = b"ONLY"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[root_item])
+        system._iter_snapshot_subsystems = MagicMock()
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path, depth=1
+        )
+        system._iter_snapshot_subsystems.assert_not_called()
 
 
 class TestItemQuery:

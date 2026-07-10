@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;padding:24px;max-width:1100px;margin:auto">
+<h2 style="color:#1F4E79">Smart Diff Report</h2>
+<p style="color:#666;font-size:12px">Generated: $timestamp &nbsp;|&nbsp; Model: $provider/$model</p>
+<div style="background:#f5f5f5;border:1px solid #ccc;padding:10px;font-size:11px;font-family:monospace;margin:12px 0">
+  <b>SOURCE OF TRUTH TRACE</b><br>
+  [file1] $filename1 &nbsp;&nbsp; UUID: <b>$uuid1</b> &nbsp;&nbsp; Revision: <b>$rev1</b><br>
+  [file2] $filename2 &nbsp;&nbsp; UUID: <b>$uuid2</b> &nbsp;&nbsp; Revision: <b>$rev2</b>
+</div>
+<h3 style="color:#2E7D32">MATCHES</h3><ul>$matches_html</ul>
+<h3 style="color:#E65100">CONFLICTS</h3>
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <tr style="background:#E65100;color:white">
+    <th style="padding:8px;text-align:left">Item</th>
+    <th style="padding:8px;text-align:left">$filename1</th>
+    <th style="padding:8px;text-align:left">$filename2</th>
+  </tr>
+  $conflicts_html
+</table>
+<h3 style="color:#C62828">MISSING</h3><ul>$missing_html</ul>
+<h3 style="color:#1565C0">AI RECOMMENDATION</h3><p style="color:#1565C0;font-style:italic">$recommendation</p>
+</body>
+</html>

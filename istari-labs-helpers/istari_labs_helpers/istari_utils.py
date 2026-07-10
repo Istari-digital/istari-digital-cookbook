@@ -14,7 +14,8 @@ Entity hierarchy
       |     +-- .configurations        -> list[ConfigurationView]
       |     +-- .branches()            -> list[BranchView]  (snapshot tags)
       |     +-- .get_branch()          -> BranchView
-      |     +-- .download_resources()  -> BranchDownloadResult (file or zip)
+      |     +-- .download_resources()  -> BranchDownloadResult (file or zip; optional depth)
+      |     +-- BranchView.subsystems() -> list[SubsystemView]
       |     +-- .add_file / .add_revision
       +-- SnapshotView        (wraps Snapshot)
       |     +-- .configuration         -> ConfigurationView
@@ -194,17 +195,71 @@ def _wire_client(client: IstariClient, obj: Any) -> Any:
     return obj
 
 
-def _entries_for_branch(system: System, branch_name: str, client: IstariClient) -> list[tuple[str, bytes]]:
-    """Collect ``(filename, bytes)`` for every revision on a branch snapshot tag."""
+def _entries_for_snapshot(
+    system: System,
+    snapshot_id: str,
+    client: IstariClient,
+    *,
+    prefix: str = "",
+) -> list[tuple[str, bytes]]:
+    """Collect ``(filename, bytes)`` for every revision pinned on a snapshot."""
     _wire_client(client, system)
-    branch = system.get_branch(branch_name)
     entries: list[tuple[str, bytes]] = []
-    for item in system.list_branch_revisions(branch):
+    for item in system._iter_snapshot_revisions(snapshot_id):
         _wire_client(client, item)
-        name = _member_name_for_branch_revision(item)
+        name = prefix + _member_name_for_branch_revision(item)
         content = item.read_bytes()
         entries.append((name, content))
     return entries
+
+
+def _entries_at_snapshot_recursive(
+    system: System,
+    snapshot_id: str,
+    client: IstariClient,
+    *,
+    depth: int,
+    prefix: str = "",
+) -> list[tuple[str, bytes]]:
+    """Collect revisions at *snapshot_id* and, when *depth* > 1, nested subsystems."""
+    entries = _entries_for_snapshot(system, snapshot_id, client, prefix=prefix)
+    if depth <= 1:
+        return entries
+    _wire_client(client, system)
+    for sub in system._iter_snapshot_subsystems(snapshot_id):
+        sub_system = _wire_client(client, client.get_system(sub.system_id))
+        sub_prefix = f"{prefix}{sub.system_name}/"
+        entries.extend(
+            _entries_at_snapshot_recursive(
+                sub_system,
+                sub.tagged_snapshot_id,
+                client,
+                depth=depth - 1,
+                prefix=sub_prefix,
+            )
+        )
+    return entries
+
+
+def _entries_for_branch(
+    system: System,
+    branch_name: str,
+    client: IstariClient,
+    *,
+    depth: int = 1,
+) -> list[tuple[str, bytes]]:
+    """Collect ``(filename, bytes)`` for every revision on a branch snapshot tag."""
+    if depth < 1:
+        raise ValueError("depth must be >= 1")
+    _wire_client(client, system)
+    branch = system.get_branch(branch_name)
+    return _entries_at_snapshot_recursive(
+        system,
+        branch.snapshot_id,
+        client,
+        depth=depth,
+        prefix="",
+    )
 
 
 def _disambiguate_member_names(names: list[str]) -> list[str]:
@@ -1889,6 +1944,68 @@ class SnapshotView:
 
 
 # ---------------------------------------------------------------------------
+# SubsystemView  —  child system linked at a branch snapshot
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SubsystemView:
+    """Fluent wrapper around a :class:`~istari_digital_client.v2.models.snapshot_subsystem_item.SnapshotSubsystemItem`.
+
+    Subsystems are other systems pinned to a parent branch's snapshot.  Use
+    :meth:`as_system` to load the child system for further inspection.
+    """
+
+    _item: Any = field(repr=False)
+    _parent_system: System = field(repr=False)
+    _client: IstariClient = field(repr=False)
+
+    def __repr__(self) -> str:
+        archived = "archived" if self.is_archived else "active"
+        return f"Subsystem({self.system_name!r}, {archived}, snapshot={self.snapshot_id})"
+
+    @property
+    def system_id(self) -> str:
+        return self._item.system_id
+
+    @property
+    def system_name(self) -> str:
+        return self._item.system_name
+
+    @property
+    def system_description(self) -> str | None:
+        return self._item.system_description
+
+    @property
+    def tag_id(self) -> str:
+        return self._item.tag_id
+
+    @property
+    def configuration_id(self) -> str:
+        return self._item.tagged_configuration_id
+
+    @property
+    def configuration_name(self) -> str:
+        return self._item.tagged_configuration_name
+
+    @property
+    def snapshot_id(self) -> str:
+        return self._item.tagged_snapshot_id
+
+    @property
+    def is_archived(self) -> bool:
+        return self._item.is_archived
+
+    @property
+    def raw(self) -> Any:
+        return self._item
+
+    def as_system(self) -> "SystemView":
+        """Load the linked child system."""
+        system = self._client.get_system(self.system_id)
+        return SystemView(_system=system, _client=self._client)
+
+
+# ---------------------------------------------------------------------------
 # BranchView  —  snapshot tag (branch) on a system
 # ---------------------------------------------------------------------------
 
@@ -1935,9 +2052,34 @@ class BranchView:
         items = self._system.list_branch_revisions(self._tag)
         return [_wire_client(self._client, item) for item in items]
 
-    def download_resources(self, dest: str | Path | None = None) -> BranchDownloadResult:
-        """Download every revision on this branch (single file or zip)."""
-        entries = _entries_for_branch(self._system, self.name, self._client)
+    def subsystems(self) -> list[SubsystemView]:
+        """Child systems linked at this branch's current snapshot.
+
+            for sub in branch.subsystems():
+                print(sub.system_name, sub.configuration_name)
+        """
+        s = _wire_client(self._client, self._system)
+        items = s.list_branch_subsystems(self._tag)
+        return [
+            SubsystemView(_item=item, _parent_system=s, _client=self._client)
+            for item in items
+        ]
+
+    def download_resources(
+        self,
+        dest: str | Path | None = None,
+        *,
+        depth: int = 1,
+    ) -> BranchDownloadResult:
+        """Download revisions on this branch (single file or zip).
+
+        *depth* controls how many subsystem levels to include:
+
+        - ``1`` (default) — this branch only
+        - ``2`` — branch plus direct subsystems
+        - ``3+`` — deeper nesting (subsystem paths use ``<name>/`` prefixes)
+        """
+        entries = _entries_for_branch(self._system, self.name, self._client, depth=depth)
         stem = f"{self._system.name}_{self.name}".replace(" ", "_")
         return _write_branch_download(entries, dest=Path(dest) if dest else None, default_stem=stem)
 
@@ -2015,12 +2157,15 @@ class SystemView:
         self,
         branch: str,
         dest: str | Path | None = None,
+        *,
+        depth: int = 1,
     ) -> BranchDownloadResult:
         """Download all file revisions on *branch* (snapshot tag name).
 
             result = system.download_resources("baseline", dest="./exports")
+            result = system.download_resources("baseline", dest="./exports", depth=2)
         """
-        return self.get_branch(branch).download_resources(dest)
+        return self.get_branch(branch).download_resources(dest, depth=depth)
 
     def find_configuration(self, name: str) -> ConfigurationView | None:
         """Find a configuration by name, or ``None``."""
@@ -2313,11 +2458,14 @@ class IstariPlatform:
         system_id: str,
         branch: str,
         dest: str | Path | None = None,
+        *,
+        depth: int = 1,
     ) -> BranchDownloadResult:
         """Download all file revisions on a system branch (snapshot tag).
 
         Writes a **single file** when the branch has one revision,
-        otherwise a **zip** archive.
+        otherwise a **zip** archive.  Set *depth* > 1 to include nested
+        subsystem resources (see :meth:`BranchView.download_resources`).
 
             result = platform.download_system_resources(
                 "92f95bf5-6c46-4e8d-a1e9-1cda4dd7eb3a",
@@ -2326,7 +2474,7 @@ class IstariPlatform:
             )
             print(result.path)
         """
-        return self.get_system_by_id(system_id).download_resources(branch, dest=dest)
+        return self.get_system_by_id(system_id).download_resources(branch, dest=dest, depth=depth)
 
     def get_or_create_system(
         self,

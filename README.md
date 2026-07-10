@@ -34,6 +34,7 @@ The notebooks cover the same platform concepts whether they use **`istari_labs_h
 | [`samples/resources/connect-resources-twc.ipynb`](samples/resources/connect-resources-twc.ipynb) | Official client (`istari_digital_client`) | Teamwork Cloud: upload pointer file (connected `mdel://` link), TWC auth, `@istari:twc_extract`. |
 | [`samples/resources/connect-resources-catia-3dx.ipynb`](samples/resources/connect-resources-catia-3dx.ipynb) | Official client (`istari_digital_client`) | 3DEXPERIENCE CATIA: register connected pointer, run `@istari:extract`. |
 | [`samples/resources/download-system-resources.ipynb`](samples/resources/download-system-resources.ipynb) | `istari_labs_helpers` | Download all tracked resources on a system branch (file or zip). |
+| [`samples/validation/ai-validation.ipynb`](samples/validation/ai-validation.ipynb) | `istari_labs_helpers` + Anthropic | Compare two text models with Claude, write an HTML diff report, track it on the system branch. `uv sync --group dev --group ai`. |
 | [`samples/org-admin/org-admin-tasks.ipynb`](samples/org-admin/org-admin-tasks.ipynb) | Official client (`istari_digital_client`) | Org admin: find user by email, list tools, grant executor access to all tools. |
 | [`samples/workflow-logs/workflow_log_scenario_a.ipynb`](samples/workflow-logs/workflow_log_scenario_a.ipynb) | Official client (`istari_digital_client` + `V3Client`) | External workflow logs — Scenario A: verification battery, fail/revise/pass loop. Registry Service **> 10.17.3** (2026-05+). `uv sync --group dev --group advanced`. |
 | [`samples/workflow-logs/workflow_log_scenario_b.ipynb`](samples/workflow-logs/workflow_log_scenario_b.ipynb) | Official client (`istari_digital_client` + `V3Client`) | External workflow logs — Scenario B: pytest tradespace sweep and campaign entries. Registry Service **> 10.17.3** (2026-05+). `uv sync --group dev --group advanced`. |
@@ -54,7 +55,7 @@ From the cookbook root, install notebook dependencies (most recipes):
 uv sync --group dev
 ```
 
-Workflow-logs recipes also need `--group advanced`. See each notebook’s prerequisites cell for the exact command.
+Workflow-logs recipes also need `--group advanced`. The AI validation recipe needs `--group ai` (Anthropic SDK + `istari-labs-helpers`). See each notebook’s prerequisites cell for the exact command.
 
 Match the installed **`istari-digital-client`** version to your Istari Digital Platform release — see [Python client version](#python-client-version) below.
 
