@@ -77,7 +77,7 @@ End with **Learn more** (doc links) and **Teardown (optional)** when the recipe 
   - `branch.configuration.add_file(...).save()` then `branch.advance_to(new_cfg)` is equivalent when you do not need the upload return value
   - Do **not** hand-roll `create_snapshot` + `update_tag` in notebooks when those helpers cover the flow
   - Do **not** re-find an uploaded model by scanning `get_models()` when you already have the upload return value
-  - Resolve a revision to its parent resource with `platform.get_resource_at_revision(revision_id)` (`doc.id` / `doc.revision_id`) rather than ad-hoc `get_file` lookups
+  - Resolve a revision to its parent resource with `platform.get_resource_at_revision(revision_id)` (`doc.id` / `doc.revision_id`); use `doc.is_latest` / `doc.latest_revision` to detect newer content rather than ad-hoc revision-list scans
 
 ## Dependency groups (`pyproject.toml`)
 
