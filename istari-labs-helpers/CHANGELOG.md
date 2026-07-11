@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`BranchView.configuration`** — configuration behind the branch HEAD snapshot.
 - **`BranchView.advance_to(configuration)`** — snapshot a configuration and move this branch tag to it.
 - **`IstariPlatform.get_resource_at_revision(revision_id)`** — parent resource pinned to that revision (`doc.id` / `doc.revision_id`).
+- **`ResourceView.is_latest`** — whether the effective revision is the resource's latest (`file.revisions[-1]`).
 - **`BranchView`** — wraps a snapshot tag (branch); `list_revisions()`, `download_resources()`.
 - **`SystemView.branches()` / `get_branch()` / `find_branch()`** — list and resolve branches (snapshot tags), not configurations.
 - **`BranchDownloadResult`** and branch download helpers — download file revisions at a branch HEAD: single file when there is one revision, `.zip` when there are several.

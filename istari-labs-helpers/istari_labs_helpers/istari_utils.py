@@ -47,7 +47,7 @@ Entity hierarchy
       |     +-- .on_success()          -> self or raise
       |     +-- .completed / .failed   bool properties
       +-- ResourceView        (unified wrapper for Artifact / Model / …)
-      |     +-- .id / .type / .raw / .file / .latest_revision
+      |     +-- .id / .type / .raw / .file / .latest_revision / .is_latest
       |     +-- .revision              -> FileRevision  (pinned if set, else latest)
       |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
       |     +-- .name / .filename / .mime / .file_id / .revision_id
@@ -916,6 +916,26 @@ class ResourceView:
     def is_pinned(self) -> bool:
         """True when the view targets a specific revision (already loaded or still deferred)."""
         return self._pinned_revision is not None or self._revision_loader is not None
+
+    @property
+    def is_latest(self) -> bool:
+        """True when the effective revision is the resource's latest file revision.
+
+        Works for pinned and unpinned views: compares ``revision`` to
+        ``latest_revision`` (from ``file.revisions``).  Useful after
+        ``get_resource_at_revision`` to detect whether a newer revision exists::
+
+            doc = platform.get_resource_at_revision(prior_revision_id)
+            if not doc.is_latest:
+                use_id = doc.latest_revision.id
+        """
+        rev = self.revision
+        latest = self.latest_revision
+        return (
+            rev is not None
+            and latest is not None
+            and rev.id == latest.id
+        )
 
     def pin(self, revision: FileRevision | str) -> ResourceView:
         """Return a new view pinned to a specific revision (fetches if given an id)."""

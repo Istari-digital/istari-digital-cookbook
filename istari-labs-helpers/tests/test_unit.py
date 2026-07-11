@@ -533,6 +533,30 @@ class TestResourceViewPinned:
         assert src.relationship_identifier == "input"
         client.get_revision.assert_not_called()
 
+    def test_is_latest_true_when_pin_is_only_revision(self):
+        view, _ = _make_pinned_product_view(revision_id="rev-1")
+        # Helper leaves file.revisions empty; attach the pin as the sole revision.
+        view.file.revisions = [view.revision]
+        assert view.is_latest is True
+
+    def test_is_latest_false_when_newer_revision_exists(self):
+        older = MagicMock()
+        older.id = "rev-old"
+        newer = MagicMock()
+        newer.id = "rev-new"
+        resource = MagicMock()
+        resource.id = "mod-1"
+        resource.file = MagicMock()
+        resource.file.revisions = [older, newer]
+        view = ResourceView(
+            _resource=resource,
+            _client=MagicMock(),
+            _pinned_revision=older,
+        )
+        assert view.is_latest is False
+        assert view.latest_revision.id == "rev-new"
+        assert view.revision_id == "rev-old"
+
 
 # ---------------------------------------------------------------------------
 # ResourceView dispatch -- run_job on Artifact auto-promotes

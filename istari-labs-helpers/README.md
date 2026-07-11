@@ -79,7 +79,7 @@ IstariPlatform                (entry point)
   |     +-- .save(name=None)         -> ConfigurationView
   +-- ResourceView            (unified wrapper over any Resource: Artifact, Model, ...)
   |     +-- .name / .filename / .mime / .file_id / .revision_id
-  |     +-- .revision / .latest_revision / .pin(rev) / .unpinned
+  |     +-- .revision / .latest_revision / .is_latest / .pin(rev) / .unpinned
   |     +-- .read_bytes() / .read_text() / .download(dest)
   |     +-- .as_source()             -> NewSource (chain into next job)
   |     +-- .promote()               -> ModelView (tag: "promoted_from")
