@@ -1,6 +1,0 @@
-PROMPT
-========================================
-Compare the 2 models: 640dd3df-9330-43a4-99ec-25c6761f6d55 and 60041d6b-1eaf-4546-b5f9-02c3cc207911
-
-PROVIDER: claude
-MODEL: claude-sonnet-4-5

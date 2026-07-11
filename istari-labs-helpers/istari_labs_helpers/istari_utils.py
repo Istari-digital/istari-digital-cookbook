@@ -15,15 +15,18 @@ Entity hierarchy
       |     +-- .branches()            -> list[BranchView]  (snapshot tags)
       |     +-- .get_branch()          -> BranchView
       |     +-- .download_resources()  -> BranchDownloadResult (file or zip; optional depth)
-      |     +-- BranchView.subsystems() -> list[SubsystemView]
       |     +-- .add_file / .add_revision
+      +-- BranchView          (wraps SnapshotTag — a branch)
+      |     +-- .list_revisions() / .subsystems() / .download_resources()
+      |     +-- .configuration         -> ConfigurationView (at branch HEAD)
+      |     +-- .advance_to(cfg)       -> self  (snapshot + move this branch tag)
       +-- SnapshotView        (wraps Snapshot)
       |     +-- .configuration         -> ConfigurationView
       +-- ConfigurationView   (wraps SystemConfiguration)
       |     +-- .get_models()          -> list[ModelView]
       |     +-- .get_tracked_files()   -> list[TrackedFile]
       |     +-- .add_file(fid)         -> TrackedFileSet  (builder)
-      |     +-- .set_baseline()        -> self  (moves system baseline here)
+      |     +-- .set_baseline()        -> self  (snapshot + move baseline tag)
       +-- TrackedFileSet        (builder for new configurations)
       |     +-- .add_file(fid)         -> self  (chainable)
       |     +-- .save(name=None)       -> ConfigurationView
@@ -132,7 +135,7 @@ from istari_digital_client.v2.models import (
     Model, File, FileRevision, System, Job,
     Snapshot, SystemConfiguration, TrackedFile,
     NewTrackedFile, NewSystemConfiguration, TrackedFileSpecifierType,
-    UpdateTag,
+    NewSnapshot, UpdateTag,
 )
 from istari_digital_client import JobStatusName
 
@@ -143,6 +146,36 @@ from istari_labs_helpers.queries import ItemQuery, ResourceQuery, ToolQuery, Use
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _snapshot_configuration(
+    client: IstariClient,
+    configuration_id: str,
+    *,
+    system_id: str | None = None,
+) -> str:
+    """Create a snapshot of *configuration_id* and return its id.
+
+    When the platform returns a no-op (state already captured), fall back to
+    the newest snapshot for that configuration (optionally scoped by *system_id*).
+    """
+    resp = client.create_snapshot(configuration_id, new_snapshot=NewSnapshot())
+    for candidate in (getattr(resp, "actual_instance", None), resp):
+        if candidate is None:
+            continue
+        snapshot_id = getattr(candidate, "id", None)
+        if isinstance(snapshot_id, str) and snapshot_id:
+            return snapshot_id
+
+    kwargs: dict[str, Any] = {"configuration_id": configuration_id}
+    if system_id is not None:
+        kwargs["system_id"] = system_id
+    snapshots = _paginate_manually(client.list_snapshots, **kwargs)
+    if not snapshots and system_id is not None:
+        snapshots = _paginate_manually(client.list_snapshots, system_id=system_id)
+    if not snapshots:
+        raise ValueError(f"No snapshot found for configuration {configuration_id}")
+    return snapshots[0].id
+
 
 def _paginate_manually(
     list_func: Callable[..., Any],
@@ -1688,6 +1721,13 @@ class TrackedFileSet:
         ))
         return self
 
+    def add_resource(self, resource: "ResourceView | ModelView") -> "TrackedFileSet":
+        """Track an already-uploaded resource by its file id. Returns ``self``."""
+        file_id = resource.file_id
+        if not file_id:
+            raise ValueError(f"{resource.type} {resource.id} has no backing file to track")
+        return self.add_file(file_id)
+
     def add_revision(self, file_id: str, revision_id: str) -> TrackedFileSet:
         """Track a file pinned to a specific revision. Returns ``self`` for chaining."""
         self._entries.append(NewTrackedFile(
@@ -1860,6 +1900,17 @@ class ConfigurationView:
             version_name=version_name,
         )
 
+    def add_resource(self, resource: "ResourceView | ModelView") -> TrackedFileSet:
+        """Track an already-uploaded resource (Model / Artifact) by its file id.
+
+            report = platform.upload_model("report.html", external_id="…")
+            cfg.add_resource(report).save()
+        """
+        file_id = resource.file_id
+        if not file_id:
+            raise ValueError(f"{resource.type} {resource.id} has no backing file to track")
+        return self.add_file(file_id)
+
     def add_revision(self, file_id: str, revision_id: str) -> TrackedFileSet:
         """Start building a new configuration with a pinned revision (LOCKED)."""
         return TrackedFileSet(
@@ -1885,22 +1936,18 @@ class ConfigurationView:
         ).add_product_as_model(product, display_name=display_name, filename=filename, external_identifier=external_identifier)
 
     def set_baseline(self) -> ConfigurationView:
-        """Move the system's baseline tag to this configuration's snapshot.
+        """Snapshot this configuration (if needed) and move the system's baseline tag here.
 
         Returns ``self`` so the call can be chained::
 
             cfg.add_file(fid).save("v5").set_baseline()
         """
         system_id = self._config.system_id
-        snapshots = _paginate_manually(
-            self._client.list_snapshots,
-            configuration_id=self._config.id,
+        snapshot_id = _snapshot_configuration(
+            self._client, self._config.id, system_id=system_id
         )
-        if not snapshots:
-            raise ValueError(f"No snapshot found for configuration {self._config.id}")
-        snapshot = snapshots[0]
         baseline = self._client.get_system_baseline(system_id)
-        self._client.update_tag(baseline.tag_id, UpdateTag(snapshot_id=snapshot.id))
+        self._client.update_tag(baseline.tag_id, UpdateTag(snapshot_id=snapshot_id))
         return self
 
     # -- mutations ----------------------------------------------------------
@@ -2046,6 +2093,49 @@ class BranchView:
     def raw(self) -> Any:
         return self._tag
 
+    @property
+    def configuration(self) -> ConfigurationView:
+        """Configuration behind this branch's current snapshot HEAD."""
+        snap = self._client.get_snapshot(self.snapshot_id)
+        system = self._client.get_system(self._system.id)
+        match = next(
+            (c for c in system.configurations or [] if c.id == snap.configuration_id),
+            None,
+        )
+        if match is None:
+            raise ValueError(
+                f"Configuration {snap.configuration_id} for branch {self.name!r} "
+                f"not found on system {system.name!r}"
+            )
+        return ConfigurationView(_config=match, _client=self._client)
+
+    def add_resource(self, resource: "ResourceView | ModelView") -> TrackedFileSet:
+        """Track an uploaded resource on this branch's configuration.
+
+            report = platform.upload_model("report.html", external_id="…")
+            new_cfg = branch.add_resource(report).save()
+            branch.advance_to(new_cfg)
+        """
+        return self.configuration.add_resource(resource)
+
+    def add_file(
+        self,
+        file_id: str | None = None,
+        *,
+        path: str | Path | None = None,
+        display_name: str | None = None,
+        external_identifier: str | None = None,
+        version_name: str | None = None,
+    ) -> TrackedFileSet:
+        """Start a new configuration from this branch HEAD with an added file."""
+        return self.configuration.add_file(
+            file_id,
+            path=path,
+            display_name=display_name,
+            external_identifier=external_identifier,
+            version_name=version_name,
+        )
+
     def list_revisions(self) -> list[Any]:
         """File revisions tracked at this branch's current snapshot."""
         _wire_client(self._client, self._system)
@@ -2064,6 +2154,25 @@ class BranchView:
             SubsystemView(_item=item, _parent_system=s, _client=self._client)
             for item in items
         ]
+
+    def advance_to(self, configuration: ConfigurationView) -> "BranchView":
+        """Snapshot *configuration* and point this branch's tag at that snapshot.
+
+            branch = system.get_branch("baseline")
+            new_cfg = branch.configuration.add_file(path="report.html").save()
+            branch.advance_to(new_cfg)
+        """
+        snapshot_id = _snapshot_configuration(
+            self._client,
+            configuration.id,
+            system_id=self._system.id,
+        )
+        self._client.update_tag(self.id, UpdateTag(snapshot_id=snapshot_id))
+        # Refresh the wrapped tag so snapshot_id reflects the new HEAD.
+        s = _wire_client(self._client, self._system)
+        self._tag = s.get_branch(self.name)
+        self._system = s
+        return self
 
     def download_resources(
         self,
@@ -2535,6 +2644,30 @@ class IstariPlatform:
     def get_revision(self, revision_id: str) -> FileRevision:
         """Return a single file revision by id (for downloads / lineage checks)."""
         return self._client.get_revision(revision_id)
+
+    def get_resource_at_revision(self, revision_id: str) -> ResourceView | ModelView:
+        """Load the resource that owns *revision_id*, pinned to that revision.
+
+        ``FileRevision`` exposes the revision UUID as ``.id`` and the parent
+        resource via ``.resource`` / ``.file.resource_id`` (there is no
+        ``.parent``).  This helper returns a :class:`ResourceView` (or
+        :class:`ModelView`) so callers can use:
+
+            doc = platform.get_resource_at_revision(revision_id)
+            doc.id            # resource (Model / Artifact) UUID
+            doc.revision_id   # file-revision UUID
+            doc.read_bytes()  # content of that exact revision
+        """
+        rev = self.get_revision(revision_id)
+        file_obj = rev.file or self._client.get_file(rev.file_id)
+        resource_id = getattr(file_obj, "resource_id", None)
+        resource_type = getattr(file_obj, "resource_type", None)
+        if not resource_id or not resource_type:
+            raise ValueError(
+                f"Revision {revision_id!r} has no parent resource "
+                f"(file_id={getattr(rev, 'file_id', None)!r})"
+            )
+        return self.get_resource(resource_type, resource_id).pin(rev)
 
     def put_text_file(
         self,

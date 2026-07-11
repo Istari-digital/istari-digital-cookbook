@@ -62,7 +62,10 @@ IstariPlatform                (entry point)
   |     +-- .download_resources()    -> BranchDownloadResult
   +-- BranchView              (wraps SnapshotTag — a branch)
   |     +-- .list_revisions()        -> list[SnapshotRevisionSearchItem]
+  |     +-- .configuration           -> ConfigurationView
+  |     +-- .advance_to(cfg)         -> self
   |     +-- .download_resources()    -> BranchDownloadResult
+  |     +-- .subsystems()            -> list[SubsystemView]
   +-- SnapshotView            (wraps Snapshot)
   |     +-- .configuration           -> ConfigurationView
   +-- ConfigurationView       (wraps SystemConfiguration)
@@ -153,17 +156,18 @@ new_cfg = cfg.add_file(
 ).save()
 ```
 
-### Add multiple files and set as baseline
+### Add a file on a branch and advance the branch HEAD
 
 ```python
-new_cfg = (
-    cfg
-    .add_file(path="resources/file_a.mdzip", display_name="File A")
-    .add_file(path="resources/file_b.mdzip", display_name="File B")
-    .save("v5")
-    .set_baseline()
-)
+branch = system.get_branch("baseline")  # or any snapshot tag name
+new_cfg = branch.configuration.add_file(
+    path="report.html",
+    display_name="report.html",
+).save()
+branch.advance_to(new_cfg)  # snapshot + move this branch tag
 ```
+
+For the baseline tag only, `save().set_baseline()` is equivalent.
 
 ### Find a model with the lazy resource query
 

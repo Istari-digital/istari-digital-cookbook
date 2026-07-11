@@ -661,6 +661,30 @@ class TestIstariPlatform:
         assert out is rev
         mock_client.get_revision.assert_called_once_with("rev-9")
 
+    def test_get_resource_at_revision_pins_parent_resource(self):
+        from istari_digital_client.v2.models import Model
+
+        rev = MagicMock()
+        rev.id = "rev-9"
+        rev.file_id = "file-1"
+        rev.file = MagicMock(resource_id="mod-1", resource_type="Model")
+
+        model = MagicMock(spec=Model)
+        model.id = "mod-1"
+        model.file = MagicMock()
+        model.file.id = "file-1"
+        model.file.revisions = [rev]
+
+        mock_client = MagicMock()
+        mock_client.get_revision.return_value = rev
+        mock_client.get_resource.return_value = model
+
+        view = IstariPlatform(mock_client).get_resource_at_revision("rev-9")
+        assert view.id == "mod-1"
+        assert view.revision_id == "rev-9"
+        mock_client.get_revision.assert_called_once_with("rev-9")
+        mock_client.get_resource.assert_called_once_with("Model", "mod-1")
+
     def test_put_text_file_add_and_update(self):
         mock_client = MagicMock()
         created = MagicMock()
@@ -957,6 +981,42 @@ class TestBranchDownload:
         assert views[0].system_name == "Wing"
         assert views[0].snapshot_id == "snap-sub"
         system.list_branch_subsystems.assert_called_once_with(branch_tag)
+
+    def test_branch_configuration_and_advance_to(self):
+        from istari_labs_helpers.istari_utils import BranchView, ConfigurationView
+
+        mock_client = MagicMock()
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-old", id="tag-main")
+        branch_tag_after = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-new", id="tag-main")
+        cfg = MagicMock()
+        cfg.id = "cfg-1"
+        cfg.name = "v2"
+        cfg.system_id = "sys-1"
+        snap = MagicMock(configuration_id="cfg-1")
+        snap.id = "snap-old"
+        new_snap = MagicMock()
+        new_snap.id = "snap-new"
+
+        system = self._make_system(mock_client)
+        system.configurations = [cfg]
+        system.get_branch = MagicMock(return_value=branch_tag_after)
+
+        mock_client.get_snapshot.return_value = snap
+        mock_client.get_system.return_value = system
+        mock_client.create_snapshot.return_value = new_snap
+
+        branch = BranchView(_tag=branch_tag, _system=system, _client=mock_client)
+        config_view = branch.configuration
+        assert isinstance(config_view, ConfigurationView)
+        assert config_view.id == "cfg-1"
+
+        new_cfg = ConfigurationView(_config=cfg, _client=mock_client)
+        out = branch.advance_to(new_cfg)
+        assert out is branch
+        assert branch.snapshot_id == "snap-new"
+        mock_client.create_snapshot.assert_called_once()
+        mock_client.update_tag.assert_called_once()
+        assert mock_client.update_tag.call_args.args[0] == "tag-main"
 
     def test_download_with_subsystem_depth(self, tmp_path):
         import zipfile
