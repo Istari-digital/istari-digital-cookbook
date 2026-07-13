@@ -1,0 +1,966 @@
+"""
+Istari Part Selector Agent
+==========================
+Pydantic-ai pipeline that reads Istari requirements and Silicon Expert part
+datasheet JSON artifacts, reasons over them to select the best part(s), and
+outputs OrCAD Capture CIS XML files ready for import into Cadence.
+
+Pipeline (4 stages):
+  1. Fetch requirements.json from Istari (by model ID or resource ID)
+  2. Fetch SE datasheet JSON artifacts from Istari (by model ID or resource IDs)
+  3. LLM selects best part(s) satisfying the requirements
+  4. Generate OrCAD CIS XML files, upload back to Istari, link to requirements
+
+Supported providers:
+  --provider anthropic   (default: claude-opus-4-5)
+  --provider openai      (default: gpt-4o)
+  --provider genesis     (default: gpt-4o, LM AI Genesis Factory)
+
+Credentials (flags > .env > environment variables):
+  --istari-url    / ISTARI_REGISTRY_URL
+  --istari-token  / ISTARI_REGISTRY_AUTH_TOKEN
+  --api-key       / ANTHROPIC_API_KEY | OPENAI_API_KEY | GENESIS_API_KEY
+
+Usage:
+  # Requirements + datasheets both live on the same Istari model:
+  python istari_part_selector_agent.py \\
+      --model-id <UUID> --datasheets-model-id <UUID> --provider anthropic
+
+  # Requirements by resource ID, datasheets by explicit resource IDs:
+  python istari_part_selector_agent.py \\
+      --requirements-id <UUID> \\
+      --datasheets-resource-ids <UUID1> <UUID2> \\
+      --provider openai --model gpt-4o
+
+  # Dry run (write XML locally only, no Istari upload):
+  python istari_part_selector_agent.py \\
+      --model-id <UUID> --datasheets-model-id <UUID> --dry-run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import tempfile
+import warnings
+from pathlib import Path
+from typing import Literal
+from xml.dom import minidom
+import xml.etree.ElementTree as ET
+
+from pydantic_ai import Agent
+from istari_digital_client import Client, Configuration, V3Client
+from istari_digital_client.v3.models.new_revision_relationship_dto import (
+    NewRevisionRelationshipDto,
+)
+from istari_digital_client.v3.models.resource_type_dto import ResourceTypeDto
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+
+warnings.filterwarnings("ignore")
+logging.disable(logging.CRITICAL)
+
+HERE = Path(__file__).parent
+
+PROVIDER_DEFAULTS = {
+    "anthropic": "claude-opus-4-5",
+    "openai":    "gpt-4o",
+    "genesis":   "gpt-4o",
+}
+
+GENESIS_BASE_URL = "https://api.ai.us.lmco.com/v1"
+
+# Artifact filename patterns used to identify SE datasheet JSON files
+DATASHEET_PATTERNS = ("datasheet", "se_part", "se-part", "silicon_expert", "siliconexpert", "part_data")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Pydantic v2 data models — input
+# ════════════════════════════════════════════════════════════════════════════
+
+class RawRequirement(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id:     str
+    name:   str = ""
+    text:   str = ""
+    req_id: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _extract_from_cameo(cls, data: dict) -> dict:
+        tags = data.get("tags", {})
+        if not data.get("text"):
+            data["text"] = tags.get("Text", "")
+        if not data.get("req_id"):
+            data["req_id"] = tags.get("Id", "")
+        return data
+
+    def is_actionable(self) -> bool:
+        return bool(self.text and self.text.strip())
+
+    @property
+    def display_id(self) -> str:
+        return self.req_id or self.id
+
+
+class SEParametric(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    name:  str = ""
+    value: str = ""
+    unit:  str | None = None
+
+    def as_string(self) -> str:
+        parts = [self.name, self.value]
+        if self.unit:
+            parts.append(self.unit)
+        return " ".join(p for p in parts if p)
+
+
+class SEPartDatasheet(BaseModel):
+    """Flexible model for a Silicon Expert part datasheet stored as JSON in Istari."""
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    part_number:    str             = Field(default="", alias="partNumber")
+    manufacturer:   str             = Field(default="")
+    description:    str             = Field(default="")
+    category:       str             = Field(default="")
+    lifecycle:      str             = Field(default="Active")
+    rohs_compliant: bool | None     = Field(default=None, alias="rohsCompliant")
+    reach_compliant: bool | None    = Field(default=None, alias="reachCompliant")
+    parametrics:    list[SEParametric] = Field(default_factory=list)
+    datasheet_url:  str | None      = Field(default=None, alias="datasheetUrl")
+
+    # Populated after loading — not from JSON
+    source_file: str = Field(default="", exclude=True)
+
+    def summary(self) -> str:
+        """Return a compact text summary for the LLM prompt."""
+        lines = [
+            f"Part: {self.part_number}",
+            f"  Manufacturer: {self.manufacturer}",
+            f"  Description:  {self.description}",
+            f"  Category:     {self.category}",
+            f"  Lifecycle:    {self.lifecycle}",
+            f"  RoHS:         {'Yes' if self.rohs_compliant else 'No' if self.rohs_compliant is False else 'Unknown'}",
+        ]
+        if self.parametrics:
+            lines.append("  Parametrics:")
+            for p in self.parametrics:
+                lines.append(f"    - {p.as_string()}")
+        if self.datasheet_url:
+            lines.append(f"  Datasheet: {self.datasheet_url}")
+        return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Pydantic v2 data models — LLM output
+# ════════════════════════════════════════════════════════════════════════════
+
+class SelectedPart(BaseModel):
+    """A part selected by the LLM to satisfy one or more requirements."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Core identification
+    mpn:          str = Field(description="Manufacturer part number, exactly as in the datasheet")
+    manufacturer: str = Field(description="Manufacturer name")
+    description:  str = Field(description="Short human-readable description of the part")
+    part_type:    Literal["Electrical", "Mechanical", "IC", "Connector", "Passive", "Other"] = \
+        Field(description="OrCAD CIS part type")
+
+    # OrCAD schematic info
+    reference_designator: str = Field(
+        description="Standard reference designator prefix: R, C, L, U, J, Q, D, F, SW, etc."
+    )
+    value:          str | None = Field(default=None, description="Component value, e.g. '4.7k', '100nF', '5V 1A'")
+    package:        str | None = Field(default=None, description="Package/footprint name, e.g. '0402', 'SOT-23', 'DIP-8'")
+    schematic_part: str | None = Field(default=None, description="OrCAD schematic symbol name if known")
+    footprint:      str | None = Field(default=None, description="PCB footprint name if known")
+
+    # Key electrical properties (only populate what applies)
+    resistance:        str | None = None
+    capacitance:       str | None = None
+    inductance:        str | None = None
+    tolerance:         str | None = None
+    voltage_rating:    str | None = None
+    current_rating:    str | None = None
+    power_rating:      str | None = None
+    frequency:         str | None = None
+    temp_min:          str | None = None
+    temp_max:          str | None = None
+    supply_voltage_min: str | None = None
+    supply_voltage_max: str | None = None
+    forward_voltage:   str | None = None
+    output_current:    str | None = None
+
+    # Compliance
+    lifecycle:    str = Field(default="Active")
+    rohs_status:  str = Field(default="Compliant")
+    reach_status: str = Field(default="Compliant")
+
+    # Source
+    datasheet_url: str | None = None
+
+    # Traceability — critical for digital thread
+    source_requirement_ids: list[str] = Field(
+        min_length=1,
+        description="List of requirement IDs (req_id/id) that this part satisfies"
+    )
+    selection_rationale: str = Field(
+        description="Concise explanation of why this part was chosen over alternatives"
+    )
+
+    # Catch-all for extra parametrics not in the fixed fields
+    additional_specs: dict[str, str] = Field(
+        default_factory=dict,
+        description="Any additional parametrics from the datasheet not covered by the fixed fields"
+    )
+
+
+class PartSelectionOutput(BaseModel):
+    """Top-level output from the selection agent."""
+    selected_parts:    list[SelectedPart] = Field(
+        description="Parts selected to satisfy the requirements. Multiple parts are allowed."
+    )
+    unmatched_req_ids: list[str] = Field(
+        default_factory=list,
+        description="Requirement IDs that could not be matched to any available datasheet"
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Any overall notes about the selection, gaps, or assumptions"
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# IstariCapability — Pydantic v2 model encapsulating auth + SDK
+# ════════════════════════════════════════════════════════════════════════════
+
+class IstariCapability(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    registry_url: str = Field(description="Istari registry base URL")
+    pat:          str = Field(description="Personal Access Token", repr=False)
+
+    _v3: V3Client = PrivateAttr()
+    _v2: Client   = PrivateAttr()
+
+    @field_validator("registry_url")
+    @classmethod
+    def _strip_slash(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @field_validator("pat")
+    @classmethod
+    def _pat_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Istari PAT must not be empty")
+        return v
+
+    def model_post_init(self, __context: object) -> None:
+        config = Configuration(registry_url=self.registry_url, registry_auth_token=self.pat)
+        self._v3 = V3Client(config)
+        self._v2 = Client(config)
+
+    # ── Requirements ─────────────────────────────────────────────────────────
+
+    def find_requirements_resource_id(self, model_id: str) -> str:
+        model = self._v2.get_model(model_id=model_id)
+        candidates = []
+        for artifact in (model.artifacts or []):
+            try:
+                fname = artifact.file.revision.name or ""
+            except Exception:
+                fname = ""
+            if "requirement" in fname.lower() and fname.lower().endswith(".json"):
+                resource_id = artifact.file.resource_id
+                if resource_id:
+                    candidates.append((fname, resource_id))
+        if not candidates:
+            names = []
+            for artifact in (model.artifacts or []):
+                try:
+                    names.append(artifact.file.revision.name or "?")
+                except Exception:
+                    names.append("?")
+            raise ValueError(
+                f"No requirements.json artifact found on model '{model_id}'.\n"
+                f"Available: {names}"
+            )
+        if len(candidates) > 1:
+            print(f"  [warn] Multiple requirements artifacts: {[c[0] for c in candidates]} — using '{candidates[0][0]}'")
+        fname, resource_id = candidates[0]
+        print(f"  [model] requirements artifact: '{fname}'  (resource_id={resource_id})")
+        return resource_id
+
+    def fetch_requirements(self, resource_id: str) -> list[RawRequirement]:
+        resource = self._v3.get_resource(resource_id)
+        raw = json.loads(self._v3.get_content(resource))
+        if not isinstance(raw, list):
+            raw = [raw]
+        return [RawRequirement.model_validate(r) for r in raw if isinstance(r, dict)]
+
+    def get_revision_id(self, resource_id: str) -> str:
+        return self._v3.get_resource(resource_id).file_revision_id
+
+    def get_resource_name(self, resource_id: str) -> str | None:
+        try:
+            return self._v3.get_resource(resource_id).display_name
+        except Exception:
+            return None
+
+    # ── SE Datasheets ─────────────────────────────────────────────────────────
+
+    def find_datasheet_resource_ids(self, model_id: str) -> list[tuple[str, str]]:
+        """Find SE datasheet JSON artifacts on a model. Returns [(filename, resource_id)]."""
+        model = self._v2.get_model(model_id=model_id)
+        found = []
+        for artifact in (model.artifacts or []):
+            try:
+                fname = artifact.file.revision.name or ""
+            except Exception:
+                fname = ""
+            fname_lower = fname.lower()
+            is_json = fname_lower.endswith(".json")
+            is_datasheet = any(pat in fname_lower for pat in DATASHEET_PATTERNS)
+            resource_id = None
+            try:
+                resource_id = artifact.file.resource_id
+            except Exception:
+                pass
+            if is_json and is_datasheet and resource_id:
+                found.append((fname, resource_id))
+        return found
+
+    def fetch_datasheet_json(self, resource_id: str) -> dict | list:
+        """Download a JSON artifact from Istari and return parsed content."""
+        resource = self._v3.get_resource(resource_id)
+        return json.loads(self._v3.get_content(resource))
+
+    # ── Upload / Link ─────────────────────────────────────────────────────────
+
+    def upload_resource(self, path: Path, display_name: str, description: str):
+        return self._v3.create_resource(
+            path=path,
+            resource_type=ResourceTypeDto.MODEL,
+            display_name=display_name,
+            description=description,
+            version_name="v1.0",
+            external_identifier=f"part-selector-agent/{display_name}",
+        )
+
+    def _get_produces_type_id(self) -> str:
+        try:
+            page = self._v3.list_revision_relationship_types(size=100)
+            for rt in (page.items or []):
+                name = (getattr(rt, "name", "") or "").lower()
+                if name in ("produces", "produce"):
+                    print(f"  [link] resolved 'produces' type id: {rt.id}")
+                    return rt.id
+            names = [getattr(rt, "name", "?") for rt in (page.items or [])]
+            print(f"  [link] WARNING: 'produces' not found. Available: {names}")
+        except Exception as exc:
+            print(f"  [link] WARNING: could not list relationship types: {exc}")
+        fallback = "fea9bd01-81bc-4db4-9aff-289bdd9745c4"
+        print(f"  [link] using fallback type id: {fallback}")
+        return fallback
+
+    def link_resources(self, from_revision_id: str, to_revision_id: str) -> None:
+        produces_type_id = self._get_produces_type_id()
+        self._v3.create_revision_relationship(
+            NewRevisionRelationshipDto(
+                relationship_type_id=produces_type_id,
+                left_revision_id=from_revision_id,
+                right_revision_id=to_revision_id,
+            )
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SE datasheet loader
+# ════════════════════════════════════════════════════════════════════════════
+
+def _parse_se_json(raw: dict | list, source_file: str) -> list[SEPartDatasheet]:
+    """
+    Parse SE JSON into a list of SEPartDatasheet objects.
+    Handles multiple SE API response shapes:
+      - A single part dict
+      - A list of part dicts
+      - {"products": [...]} wrapper
+      - {"data": {...}} or {"results": [...]} wrappers
+    """
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict):
+        # Try common SE wrapper keys
+        for key in ("products", "results", "data", "parts", "items"):
+            if key in raw and isinstance(raw[key], (list, dict)):
+                inner = raw[key]
+                items = inner if isinstance(inner, list) else [inner]
+                break
+        else:
+            items = [raw]
+    else:
+        return []
+
+    parts = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            # Normalise parametrics: accept list[dict] or dict[str, str]
+            parametrics_raw = item.get("parametrics", item.get("attributes", []))
+            if isinstance(parametrics_raw, dict):
+                parametrics_raw = [{"name": k, "value": v} for k, v in parametrics_raw.items()]
+            item["parametrics"] = parametrics_raw
+
+            part = SEPartDatasheet.model_validate(item)
+            part.source_file = source_file
+            parts.append(part)
+        except Exception:
+            continue
+    return parts
+
+
+def load_datasheets_from_istari(
+    istari: IstariCapability,
+    model_id: str | None,
+    resource_ids: list[str],
+) -> list[SEPartDatasheet]:
+    """Load all SE datasheet JSONs from Istari and return parsed parts."""
+    to_fetch: list[tuple[str, str]] = []  # [(label, resource_id)]
+
+    if model_id:
+        print(f"  [datasheets] Scanning artifacts on model {model_id} ...")
+        found = istari.find_datasheet_resource_ids(model_id)
+        if not found:
+            print(f"  [datasheets] WARNING: no SE datasheet JSON artifacts found on model {model_id}")
+            print(f"               Expected filenames containing: {DATASHEET_PATTERNS}")
+        else:
+            print(f"  [datasheets] Found {len(found)} datasheet artifact(s):")
+            for fname, rid in found:
+                print(f"               '{fname}'  (resource_id={rid})")
+            to_fetch.extend(found)
+
+    for rid in resource_ids:
+        label = istari.get_resource_name(rid) or rid
+        to_fetch.append((label, rid))
+
+    if not to_fetch:
+        return []
+
+    all_parts: list[SEPartDatasheet] = []
+    for label, rid in to_fetch:
+        try:
+            raw = istari.fetch_datasheet_json(rid)
+            parts = _parse_se_json(raw, source_file=label)
+            print(f"  [datasheets] '{label}': {len(parts)} part(s) parsed")
+            all_parts.extend(parts)
+        except Exception as exc:
+            print(f"  [datasheets] WARNING: could not load '{label}': {exc}")
+
+    return all_parts
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# OrCAD Capture CIS XML generator
+# ════════════════════════════════════════════════════════════════════════════
+
+def part_to_cis_xml(part: SelectedPart) -> str:
+    """Serialize a SelectedPart to OrCAD Capture CIS XML (pretty-printed)."""
+
+    root = ET.Element("CISDatabase")
+    root.set("version", "1.0")
+    root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+
+    comp = ET.SubElement(root, "Component")
+
+    def attr(name: str, value: str | bool | None) -> None:
+        if value is None or value == "":
+            return
+        a = ET.SubElement(comp, "Attribute")
+        a.set("name", name)
+        if isinstance(value, bool):
+            a.text = "Yes" if value else "No"
+        else:
+            a.text = str(value)
+
+    # Primary identification
+    attr("Part_Number",  part.mpn)
+    attr("MPN",          part.mpn)
+    attr("Part_Type",    part.part_type)
+    attr("Description",  part.description)
+    attr("Manufacturer", part.manufacturer)
+
+    # OrCAD schematic
+    attr("Reference",      part.reference_designator)
+    attr("Value",          part.value)
+    attr("Package",        part.package)
+    attr("Schematic_Part", part.schematic_part or part.reference_designator)
+    attr("Footprint",      part.footprint)
+
+    # Electrical properties (only those with values)
+    attr("Resistance",         part.resistance)
+    attr("Capacitance",        part.capacitance)
+    attr("Inductance",         part.inductance)
+    attr("Tolerance",          part.tolerance)
+    attr("Voltage_Rating",     part.voltage_rating)
+    attr("Current_Rating",     part.current_rating)
+    attr("Power_Rating",       part.power_rating)
+    attr("Frequency",          part.frequency)
+    attr("Temperature_Min",    part.temp_min)
+    attr("Temperature_Max",    part.temp_max)
+    attr("Supply_Voltage_Min", part.supply_voltage_min)
+    attr("Supply_Voltage_Max", part.supply_voltage_max)
+    attr("Forward_Voltage",    part.forward_voltage)
+    attr("Output_Current",     part.output_current)
+
+    # Compliance
+    attr("Lifecycle",  part.lifecycle)
+    attr("RoHS",       part.rohs_status)
+    attr("REACH",      part.reach_status)
+
+    # Source reference
+    attr("Datasheet_URL",       part.datasheet_url)
+    attr("Source_Requirements", ", ".join(part.source_requirement_ids))
+    attr("Selection_Rationale", part.selection_rationale)
+
+    # Additional parametrics
+    for k, v in (part.additional_specs or {}).items():
+        attr(k, v)
+
+    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
+    dom = minidom.parseString(f'<?xml version="1.0" encoding="UTF-8"?>{xml_bytes}')
+    return dom.toprettyxml(indent="  ", encoding=None).lstrip('<?xml version="1.0" ?>\n').strip()
+
+
+def parts_to_cis_xml_bundle(parts: list[SelectedPart]) -> str:
+    """Serialize all selected parts into a single CIS XML file."""
+    root = ET.Element("CISDatabase")
+    root.set("version", "1.0")
+    root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+
+    for part in parts:
+        comp = ET.SubElement(root, "Component")
+
+        def attr(name: str, value: str | bool | None, _comp=comp) -> None:
+            if value is None or value == "":
+                return
+            a = ET.SubElement(_comp, "Attribute")
+            a.set("name", name)
+            a.text = "Yes" if value is True else "No" if value is False else str(value)
+
+        attr("Part_Number",  part.mpn)
+        attr("MPN",          part.mpn)
+        attr("Part_Type",    part.part_type)
+        attr("Description",  part.description)
+        attr("Manufacturer", part.manufacturer)
+        attr("Reference",    part.reference_designator)
+        attr("Value",        part.value)
+        attr("Package",      part.package)
+        attr("Schematic_Part", part.schematic_part or part.reference_designator)
+        attr("Footprint",    part.footprint)
+        attr("Resistance",   part.resistance)
+        attr("Capacitance",  part.capacitance)
+        attr("Inductance",   part.inductance)
+        attr("Tolerance",    part.tolerance)
+        attr("Voltage_Rating",     part.voltage_rating)
+        attr("Current_Rating",     part.current_rating)
+        attr("Power_Rating",       part.power_rating)
+        attr("Frequency",          part.frequency)
+        attr("Temperature_Min",    part.temp_min)
+        attr("Temperature_Max",    part.temp_max)
+        attr("Supply_Voltage_Min", part.supply_voltage_min)
+        attr("Supply_Voltage_Max", part.supply_voltage_max)
+        attr("Forward_Voltage",    part.forward_voltage)
+        attr("Output_Current",     part.output_current)
+        attr("Lifecycle",  part.lifecycle)
+        attr("RoHS",       part.rohs_status)
+        attr("REACH",      part.reach_status)
+        attr("Datasheet_URL",       part.datasheet_url)
+        attr("Source_Requirements", ", ".join(part.source_requirement_ids))
+        attr("Selection_Rationale", part.selection_rationale)
+        for k, v in (part.additional_specs or {}).items():
+            attr(k, v)
+
+    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
+    dom = minidom.parseString(f'<?xml version="1.0" encoding="UTF-8"?>{xml_bytes}')
+    return dom.toprettyxml(indent="  ", encoding=None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LLM agent
+# ════════════════════════════════════════════════════════════════════════════
+
+SELECTION_SYSTEM = """\
+You are a senior hardware procurement and design engineer specialising in
+component selection for embedded systems and electronic assemblies.
+
+Given:
+  1. A list of engineering requirements (from a Cameo/SysML model)
+  2. A set of Silicon Expert part datasheets (parametric data as JSON)
+
+Your task is to select the best available part(s) from the provided datasheets
+to satisfy the requirements.
+
+Rules:
+- Every requirement must be addressed. If no datasheet part can satisfy a
+  requirement, add its ID to unmatched_req_ids and explain in notes.
+- One part may satisfy multiple requirements — list all requirement IDs it
+  covers in source_requirement_ids.
+- Prefer Active lifecycle, RoHS-compliant parts.
+- For each selected part, provide a concise but complete selection_rationale
+  explaining why this specific part was chosen (key parameters that match).
+- Populate every known electrical/mechanical attribute from the datasheet data.
+- Use the standard reference designator prefix (R, C, L, U, Q, D, J, F, SW …).
+- Keep part_type consistent with OrCAD CIS conventions:
+    Passive     → resistors, capacitors, inductors, crystals
+    IC          → microcontrollers, op-amps, drivers, regulators
+    Connector   → connectors, sockets
+    Mechanical  → washers, fasteners, heatsinks, structural parts
+    Electrical  → diodes, transistors, MOSFETs, fuses
+    Other       → anything else
+- additional_specs: capture any important parametrics not already in the
+  fixed fields (e.g. ESD rating, quiescent current, gain-bandwidth product).
+- Be conservative — only select parts for which there is clear datasheet evidence.
+"""
+
+
+def _make_openai_llm(model_name: str, api_key: str, base_url: str | None = None):
+    try:
+        from pydantic_ai.models.openai import OpenAIModel as _Model
+    except ImportError:
+        from pydantic_ai.models.openai import OpenAIChatModel as _Model  # type: ignore[no-redef]
+    from pydantic_ai.providers.openai import OpenAIProvider as _Provider
+    kwargs: dict = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return _Model(model_name, provider=_Provider(**kwargs))
+
+
+def build_selection_agent(provider: str, api_key: str, model_name: str) -> Agent:
+    if provider == "anthropic":
+        try:
+            from pydantic_ai.models.anthropic import AnthropicModel as _Model
+        except ImportError:
+            from pydantic_ai.models.anthropic import AnthropicChatModel as _Model  # type: ignore[no-redef]
+        try:
+            from pydantic_ai.providers.anthropic import AnthropicProvider as _Provider
+        except ImportError:
+            from pydantic_ai.providers.anthropic import AnthropicChatProvider as _Provider  # type: ignore[no-redef]
+        llm = _Model(model_name, provider=_Provider(api_key=api_key))
+
+    elif provider == "openai":
+        llm = _make_openai_llm(model_name, api_key)
+
+    elif provider == "genesis":
+        llm = _make_openai_llm(model_name, api_key, base_url=GENESIS_BASE_URL)
+
+    else:
+        raise ValueError(f"Unknown provider '{provider}'. Choose 'anthropic', 'openai', or 'genesis'.")
+
+    return Agent(llm, output_type=PartSelectionOutput, system_prompt=SELECTION_SYSTEM)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Pipeline
+# ════════════════════════════════════════════════════════════════════════════
+
+def run_pipeline(
+    selection_agent: Agent,
+    istari: IstariCapability,
+    model_name: str,
+    dry_run: bool = False,
+    requirements_model_id: str | None = None,
+    requirements_id: str | None = None,
+    datasheets_model_id: str | None = None,
+    datasheets_resource_ids: list[str] | None = None,
+) -> PartSelectionOutput:
+
+    # ── Step 1: Fetch requirements ────────────────────────────────────────────
+    if requirements_id:
+        print(f"\n[1/4] Downloading requirements (resource_id={requirements_id}) ...")
+    else:
+        print(f"\n[1/4] Locating requirements for model {requirements_model_id} ...")
+        requirements_id = istari.find_requirements_resource_id(requirements_model_id)
+
+    req_revision_id = istari.get_revision_id(requirements_id)
+    all_reqs        = istari.fetch_requirements(requirements_id)
+    actionable      = [r for r in all_reqs if r.is_actionable()]
+    print(f"      revision_id={req_revision_id}")
+    print(f"      {len(all_reqs)} total, {len(actionable)} with text")
+
+    if not actionable:
+        print("No actionable requirements — nothing to select.")
+        return PartSelectionOutput(selected_parts=[], unmatched_req_ids=[])
+
+    # ── Step 2: Fetch SE datasheets ───────────────────────────────────────────
+    print(f"\n[2/4] Loading Silicon Expert datasheets from Istari ...")
+    datasheets = load_datasheets_from_istari(
+        istari,
+        model_id=datasheets_model_id,
+        resource_ids=datasheets_resource_ids or [],
+    )
+    print(f"      {len(datasheets)} part datasheet(s) loaded")
+
+    if not datasheets:
+        print("ERROR: no SE datasheet data loaded. "
+              "Use --datasheets-model-id or --datasheets-resource-ids.")
+        sys.exit(1)
+
+    # ── Step 3: LLM selection ─────────────────────────────────────────────────
+    print(f"\n[3/4] Selecting parts ({model_name}) ...")
+
+    req_block = "\n".join(
+        f"[{r.display_id}] {r.text}" for r in actionable
+    )
+    ds_block = "\n\n".join(d.summary() for d in datasheets)
+
+    prompt = (
+        "REQUIREMENTS\n"
+        "============\n"
+        f"{req_block}\n\n"
+        "AVAILABLE PARTS (Silicon Expert datasheets)\n"
+        "===========================================\n"
+        f"{ds_block}\n\n"
+        "Select the best part(s) from the available datasheets to satisfy the requirements above."
+    )
+
+    result: PartSelectionOutput = selection_agent.run_sync(prompt).output
+
+    print(f"      ✓ {len(result.selected_parts)} part(s) selected, "
+          f"{len(result.unmatched_req_ids)} requirement(s) unmatched")
+    for p in result.selected_parts:
+        print(f"      {p.mpn}  ({p.manufacturer})  covers={p.source_requirement_ids}")
+    if result.unmatched_req_ids:
+        print(f"      unmatched: {result.unmatched_req_ids}")
+    if result.notes:
+        print(f"      notes: {result.notes}")
+
+    # ── Step 4: Generate XML + upload ─────────────────────────────────────────
+    print(f"\n[4/4] Generating OrCAD Capture CIS XML and uploading ...")
+
+    local_out = HERE / "output"
+    local_out.mkdir(exist_ok=True)
+
+    uploaded: list[dict] = []
+
+    # Individual per-part XML files
+    for part in result.selected_parts:
+        safe_mpn = part.mpn.replace("/", "-").replace("\\", "-").replace(" ", "_")
+        fname = f"{safe_mpn}.cis.xml"
+        xml_content = part_to_cis_xml(part)
+        (local_out / fname).write_text(xml_content, encoding="utf-8")
+
+        if dry_run:
+            print(f"  [dry-run] {fname} written locally")
+        else:
+            tmp = Path(tempfile.gettempdir()) / fname
+            tmp.write_text(xml_content, encoding="utf-8")
+            resource = istari.upload_resource(
+                tmp, fname,
+                f"OrCAD CIS part [{part.mpn}] — pydantic-ai selector agent",
+            )
+            tmp.unlink(missing_ok=True)
+            istari.link_resources(req_revision_id, resource.file_revision_id)
+            uploaded.append({
+                "mpn":         part.mpn,
+                "file":        fname,
+                "resource_id": resource.resource_id,
+                "revision_id": resource.file_revision_id,
+                "req_ids":     part.source_requirement_ids,
+            })
+            print(f"  ✓ {fname}")
+            print(f"      resource_id={resource.resource_id}")
+            print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
+
+    # Bundle XML (all parts in one file)
+    bundle_fname = "selected_parts_bundle.cis.xml"
+    bundle_xml = parts_to_cis_xml_bundle(result.selected_parts)
+    (local_out / bundle_fname).write_text(bundle_xml, encoding="utf-8")
+
+    if dry_run:
+        print(f"  [dry-run] {bundle_fname} written locally")
+    else:
+        tmp = Path(tempfile.gettempdir()) / bundle_fname
+        tmp.write_text(bundle_xml, encoding="utf-8")
+        resource = istari.upload_resource(
+            tmp, bundle_fname,
+            "OrCAD CIS part bundle — all selected parts",
+        )
+        tmp.unlink(missing_ok=True)
+        istari.link_resources(req_revision_id, resource.file_revision_id)
+        print(f"  ✓ {bundle_fname}  →  resource_id={resource.resource_id}")
+
+    # Summary JSON
+    summary = {
+        "requirements_source":   requirements_id,
+        "requirements_revision": req_revision_id,
+        "model":                 model_name,
+        "total_requirements":    len(actionable),
+        "parts_selected":        len(result.selected_parts),
+        "unmatched_req_ids":     result.unmatched_req_ids,
+        "notes":                 result.notes,
+        "outputs": uploaded if not dry_run else [
+            {"mpn": p.mpn, "file": f"{p.mpn.replace('/', '-')}.cis.xml"}
+            for p in result.selected_parts
+        ],
+    }
+    summary_fname = "part_selection_summary.json"
+    (local_out / summary_fname).write_text(json.dumps(summary, indent=2))
+
+    if not dry_run:
+        tmp = Path(tempfile.gettempdir()) / summary_fname
+        tmp.write_text(json.dumps(summary, indent=2))
+        resource = istari.upload_resource(tmp, summary_fname, "Part Selector Agent run summary")
+        tmp.unlink(missing_ok=True)
+        istari.link_resources(req_revision_id, resource.file_revision_id)
+        print(f"  ✓ {summary_fname}  →  resource_id={resource.resource_id}")
+
+    # Print summary
+    print(f"\n{'─'*60}")
+    print(f"Done. {len(result.selected_parts)} part(s) selected.")
+    if result.unmatched_req_ids:
+        print(f"Unmatched requirements: {result.unmatched_req_ids}")
+    print(f"Local output: {local_out}/")
+
+    if not dry_run and uploaded:
+        print(f"\n{'═'*60}")
+        print("Digital Thread")
+        print(f"{'═'*60}")
+        src_name = istari.get_resource_name(requirements_id) or requirements_id
+        print(f"\n  {src_name}  (id={requirements_id})")
+        print(f"  └─ produces:")
+        for i, entry in enumerate(uploaded):
+            connector = "└─" if i == len(uploaded) - 1 else "├─"
+            print(f"     {connector} {entry['file']}  (id={entry['resource_id']})")
+
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CLI
+# ════════════════════════════════════════════════════════════════════════════
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Istari Part Selector Agent — pydantic-ai, provider-agnostic.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    # Requirements source
+    req = p.add_argument_group("Requirements source (choose one)")
+    req_src = req.add_mutually_exclusive_group(required=True)
+    req_src.add_argument("--model-id", metavar="UUID",
+                         help="Istari model ID — agent finds the requirements.json artifact automatically")
+    req_src.add_argument("--requirements-id", metavar="UUID",
+                         help="Istari resource ID of the requirements.json")
+
+    # Datasheets source
+    ds = p.add_argument_group("SE datasheet source (at least one required)")
+    ds.add_argument("--datasheets-model-id", metavar="UUID", default=None,
+                    help="Istari model ID to scan for SE datasheet JSON artifacts")
+    ds.add_argument("--datasheets-resource-ids", metavar="UUID", nargs="+", default=None,
+                    help="One or more Istari resource IDs for SE datasheet JSON files")
+
+    # LLM
+    llm = p.add_argument_group("LLM provider")
+    llm.add_argument("--provider", choices=["anthropic", "openai", "genesis"], default="anthropic",
+                     help="LLM provider (default: anthropic)")
+    llm.add_argument("--api-key", default=None,
+                     help="API key for the chosen provider")
+    llm.add_argument("--model", default=None,
+                     help="LLM model name (default: see PROVIDER_DEFAULTS)")
+
+    # Istari
+    auth = p.add_argument_group("Istari auth")
+    auth.add_argument("--istari-url",   default=None, help="Istari registry URL")
+    auth.add_argument("--istari-token", default=None, help="Istari Personal Access Token")
+
+    # Misc
+    p.add_argument("--env-file", default=None, metavar="PATH",
+                   help="Path to a .env file with credentials (default: .env next to this script)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Select parts and write XML locally; skip Istari upload")
+    return p.parse_args()
+
+
+def _load_env(env_file: str | None) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        print("WARNING: python-dotenv not installed — .env file skipped.", file=sys.stderr)
+        return
+    path = Path(env_file) if env_file else HERE / ".env"
+    if path.exists():
+        load_dotenv(dotenv_path=path, override=False)
+        print(f"  [config] Loaded credentials from {path}")
+    elif env_file:
+        print(f"ERROR: .env file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main() -> None:
+    args = parse_args()
+    _load_env(args.env_file)
+
+    if not args.datasheets_model_id and not args.datasheets_resource_ids:
+        print("ERROR: must supply --datasheets-model-id and/or --datasheets-resource-ids", file=sys.stderr)
+        sys.exit(1)
+
+    env_key_name = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai":    "OPENAI_API_KEY",
+        "genesis":   "GENESIS_API_KEY",
+    }[args.provider]
+
+    api_key      = args.api_key     or os.environ.get(env_key_name)
+    istari_url   = args.istari_url  or os.environ.get("ISTARI_REGISTRY_URL")
+    istari_token = args.istari_token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN")
+    model_name   = args.model       or PROVIDER_DEFAULTS[args.provider]
+
+    missing = {k for k, v in {
+        env_key_name:                 api_key,
+        "ISTARI_REGISTRY_URL":        istari_url,
+        "ISTARI_REGISTRY_AUTH_TOKEN": istari_token,
+    }.items() if not v}
+    if missing:
+        for k in missing:
+            print(f"ERROR: missing {k}", file=sys.stderr)
+        sys.exit(1)
+
+    istari = IstariCapability(registry_url=istari_url, pat=istari_token)
+    agent  = build_selection_agent(args.provider, api_key, model_name)
+
+    print("Istari Part Selector Agent")
+    print("=" * 60)
+    print(f"  Provider:    {args.provider}")
+    print(f"  LLM model:   {model_name}")
+    print(f"  Istari:      {istari.registry_url}")
+    if args.model_id:
+        print(f"  Requirements model: {args.model_id}")
+    else:
+        print(f"  Requirements ID:    {args.requirements_id}")
+    if args.datasheets_model_id:
+        print(f"  Datasheets model:   {args.datasheets_model_id}")
+    if args.datasheets_resource_ids:
+        print(f"  Datasheet IDs:      {args.datasheets_resource_ids}")
+    print(f"  Dry run:     {args.dry_run}")
+
+    run_pipeline(
+        selection_agent=agent,
+        istari=istari,
+        model_name=model_name,
+        dry_run=args.dry_run,
+        requirements_model_id=args.model_id,
+        requirements_id=args.requirements_id,
+        datasheets_model_id=args.datasheets_model_id,
+        datasheets_resource_ids=args.datasheets_resource_ids,
+    )
+
+
+if __name__ == "__main__":
+    main()
