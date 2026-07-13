@@ -9,7 +9,7 @@ Pipeline (4 stages):
   1. Fetch requirements.json from Istari (by model ID or resource ID)
   2. Fetch SE datasheet JSON artifacts from Istari (by model ID or resource IDs)
   3. LLM selects best part(s) satisfying the requirements
-  4. Generate OrCAD CIS XML files, upload back to Istari, link to requirements
+  4. Generate OrCAD CIS XML files + OLB symbol library JSON, upload to Istari
 
 Supported providers:
   --provider anthropic   (default: claude-opus-4-5)
@@ -159,6 +159,42 @@ class SEPartDatasheet(BaseModel):
 # Pydantic v2 data models — LLM output
 # ════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# OLB symbol library models
+# ════════════════════════════════════════════════════════════════════════════
+
+class OLBPin(BaseModel):
+    """One pin in an OrCAD schematic symbol."""
+    number:   str = Field(description="Pin number as a string, e.g. '1', '2', 'A1'")
+    name:     str = Field(description="Pin name, e.g. 'VCC', 'GND', 'IN+', 'OUT', 'SDA'")
+    type:     Literal["Power", "Input", "Output", "Passive", "Bidirectional", "OpenCollector",
+                      "OpenEmitter", "NotConnected", "3State"] = Field(
+        description="OrCAD pin electrical type"
+    )
+    shape:    Literal["Line", "Short", "Clock", "InvertedClock", "DotClock",
+                      "Dot", "ZeroLength"] = Field(
+        default="Line",
+        description="OrCAD pin shape. Use 'Short' for hidden power/GND pins (sets visible=false)."
+    )
+    group:    str = Field(
+        default="1",
+        description="Pin group number as a string — '1' for single-body, '1'/'2'/… for multi-section ICs"
+    )
+    position: Literal["Top", "Bottom", "Left", "Right"] = Field(
+        description=(
+            "Side of the symbol body this pin is placed on. "
+            "Convention: Power/VCC → Top, GND → Bottom, Inputs → Left, Outputs → Right"
+        )
+    )
+    visible:  bool = Field(
+        default=True,
+        description=(
+            "Whether the pin stub is visible on the schematic symbol. "
+            "Set false for hidden power/GND pins that use shape='Short'."
+        )
+    )
+
+
 class SelectedPart(BaseModel):
     """A part selected by the LLM to satisfy one or more requirements."""
     model_config = ConfigDict(populate_by_name=True)
@@ -169,6 +205,20 @@ class SelectedPart(BaseModel):
     description:  str = Field(description="Short human-readable description of the part")
     part_type:    Literal["Electrical", "Mechanical", "IC", "Connector", "Passive", "Other"] = \
         Field(description="OrCAD CIS part type")
+
+    # OrCAD part metadata
+    num_sections:  str = Field(
+        default="1",
+        description="Number of schematic sections/gates (as string). '1' for most parts; '2' for dual op-amps, etc."
+    )
+    section_style: str = Field(
+        default="1",
+        description="OrCAD section style. '1' = homogeneous single section."
+    )
+    package_type:  str | None = Field(
+        default=None,
+        description="Base package family, e.g. 'TSSOP', 'SOT-23', 'DIP', 'QFN' (without pin count suffix)"
+    )
 
     # OrCAD schematic info
     reference_designator: str = Field(
@@ -216,6 +266,20 @@ class SelectedPart(BaseModel):
     additional_specs: dict[str, str] = Field(
         default_factory=dict,
         description="Any additional parametrics from the datasheet not covered by the fixed fields"
+    )
+
+    # OrCAD OLB symbol pin definitions
+    pins: list[OLBPin] = Field(
+        default_factory=list,
+        description=(
+            "Pin definitions for the OrCAD schematic symbol. "
+            "Infer from part type and datasheet data. "
+            "Resistors/caps/inductors: 2 Passive pins (1=Left, 2=Right). "
+            "Diodes: Anode=Left Passive, Cathode=Right Passive. "
+            "MOSFETs: Gate=Left Input, Drain=Top Output, Source=Bottom Passive. "
+            "Op-amps: IN+=Left Input, IN-=Left Input, OUT=Right Output, V+=Top Power, V-=Bottom Power. "
+            "ICs: derive from number-of-pins parametric; group power/gnd separately from signal pins."
+        )
     )
 
 
@@ -591,6 +655,100 @@ def parts_to_cis_xml_bundle(parts: list[SelectedPart]) -> str:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# OrCAD OLB symbol library JSON generator
+# ════════════════════════════════════════════════════════════════════════════
+
+def parts_to_olb_json(parts: list[SelectedPart], library_name: str = "selected_parts") -> str:
+    """
+    Serialize selected parts to an OrCAD OLB library JSON.
+    Format matches the OrCAD schematic symbol library structure.
+    """
+    olb_parts = []
+    for part in parts:
+        safe_mpn = part.mpn.replace("/", "-").replace("\\", "-").replace(" ", "_")
+        pins = [
+            {
+                "number":   p.number,
+                "name":     p.name,
+                "type":     p.type,
+                "shape":    p.shape,
+                "group":    p.group,
+                "position": p.position,
+            }
+            for p in (part.pins or [])
+        ]
+        # Fall back to two generic passive pins if LLM produced none
+        if not pins:
+            pins = [
+                {"number": "1", "name": "1", "type": "Passive",
+                 "shape": "Line", "group": "G1", "position": "Left"},
+                {"number": "2", "name": "2", "type": "Passive",
+                 "shape": "Line", "group": "G1", "position": "Right"},
+            ]
+        olb_parts.append({
+            "name":        safe_mpn,
+            "description": part.description,
+            "reference":   part.reference_designator,
+            "value":       part.value or part.mpn,
+            "pins":        pins,
+        })
+
+    library = {
+        "library": {
+            "path": f"libraries/{library_name}.olb",
+            "parts": olb_parts,
+        }
+    }
+    return json.dumps(library, indent=2)
+
+
+def parts_to_parts_json(parts: list[SelectedPart]) -> str:
+    """
+    Serialize selected parts to the flat parts-list JSON format used by Cadence
+    OrCAD part import tools.  All type/shape/position values are UPPERCASE.
+    """
+    out = []
+    for part in parts:
+        safe_mpn = part.mpn.replace("/", "-").replace("\\", "-").replace(" ", "_")
+
+        # Build pin list — UPPERCASE field values, include visible flag
+        pins = []
+        for p in (part.pins or []):
+            pins.append({
+                "number":   p.number,
+                "name":     p.name,
+                "type":     p.type.upper(),
+                "visible":  p.visible,
+                "shape":    p.shape.upper(),
+                "group":    p.group,
+                "position": p.position.upper(),
+            })
+        if not pins:
+            pins = [
+                {"number": "1", "name": "1", "type": "PASSIVE",
+                 "visible": True, "shape": "LINE", "group": "1", "position": "LEFT"},
+                {"number": "2", "name": "2", "type": "PASSIVE",
+                 "visible": True, "shape": "LINE", "group": "1", "position": "RIGHT"},
+            ]
+
+        out.append({
+            "name":          safe_mpn,
+            "num_sections":  part.num_sections,
+            "prefix":        part.reference_designator,
+            "section_style": part.section_style,
+            "mfg_pn":        part.mpn,
+            "partNumber":    part.mpn,
+            "manufacturer":  part.manufacturer,
+            "value":         part.value or part.mpn,
+            "description":   part.description,
+            "package_type":  part.package_type or (part.package or "").split("-")[0] or "",
+            "pcb_footprint": part.footprint or part.package or "",
+            "pins":          pins,
+        })
+    return json.dumps(out, indent=2)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # LLM agent
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -625,6 +783,28 @@ Rules:
 - additional_specs: capture any important parametrics not already in the
   fixed fields (e.g. ESD rating, quiescent current, gain-bandwidth product).
 - Be conservative — only select parts for which there is clear datasheet evidence.
+
+For the 'pins' field on each selected part, generate OrCAD schematic symbol
+pin definitions using these conventions:
+  Passives (R, C, L):  pin 1 Left Passive, pin 2 Right Passive
+  Diodes:              Anode (A) Left Passive, Cathode (K) Right Passive
+  BJT:                 Base Left Input, Collector Top Output, Emitter Bottom Passive
+  MOSFET:              Gate (G) Left Input, Drain (D) Top Output, Source (S) Bottom Passive
+  Op-amp:              IN+ Left Input, IN- Left Input, OUT Right Output,
+                       V+ Top Power, V- Bottom Power (group G1 for signal, G2 for power)
+  Voltage regulator:   IN Left Input, OUT Right Output, GND/ADJ Bottom Power
+  Microcontroller:     VCC/VDD Top Power, GND Bottom Power,
+                       remaining signal pins Left Input or Right Output based on function
+  Connector:           all pins are Passive, alternating Left/Right or sequential Left
+  Crystal/oscillator:  1/IN Left Passive, 2/GND Bottom Power, 3/OUT Right Output,
+                       4/VCC Top Power (if 4-pin)
+  For ICs with many pins, use the number-of-pins parametric and distribute
+  signal pins Left (inputs) and Right (outputs), power on Top, ground on Bottom.
+  Always include at least one pin per part.
+  Pin group is a numeric string: '1' for all pins on a single-section part.
+  Set visible=false and shape='Short' for hidden GND/power pins (e.g. exposed pad).
+  Set package_type to the base family without pin count ('TSSOP', 'SOT-23', 'QFN').
+  Set num_sections to '2' for dual op-amps, '4' for quad gates, etc.
 """
 
 
@@ -775,6 +955,56 @@ def run_pipeline(
             print(f"  ✓ {fname}")
             print(f"      resource_id={resource.resource_id}")
             print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
+
+    # OLB symbol library JSON
+    olb_fname = "selected_parts.olb.json"
+    olb_content = parts_to_olb_json(result.selected_parts)
+    (local_out / olb_fname).write_text(olb_content, encoding="utf-8")
+
+    if dry_run:
+        print(f"  [dry-run] {olb_fname} written locally")
+    else:
+        tmp = Path(tempfile.gettempdir()) / olb_fname
+        tmp.write_text(olb_content, encoding="utf-8")
+        resource = istari.upload_resource(
+            tmp, olb_fname,
+            "OrCAD OLB symbol library — selected parts",
+        )
+        tmp.unlink(missing_ok=True)
+        istari.link_resources(req_revision_id, resource.file_revision_id)
+        uploaded.append({
+            "mpn":         "OLB_library",
+            "file":        olb_fname,
+            "resource_id": resource.resource_id,
+            "revision_id": resource.file_revision_id,
+            "req_ids":     [],
+        })
+        print(f"  ✓ {olb_fname}  →  resource_id={resource.resource_id}")
+
+    # Parts list JSON (flat array format for Cadence OrCAD import)
+    parts_fname = "selected_parts.json"
+    parts_content = parts_to_parts_json(result.selected_parts)
+    (local_out / parts_fname).write_text(parts_content, encoding="utf-8")
+
+    if dry_run:
+        print(f"  [dry-run] {parts_fname} written locally")
+    else:
+        tmp = Path(tempfile.gettempdir()) / parts_fname
+        tmp.write_text(parts_content, encoding="utf-8")
+        resource = istari.upload_resource(
+            tmp, parts_fname,
+            "OrCAD parts list JSON — selected parts",
+        )
+        tmp.unlink(missing_ok=True)
+        istari.link_resources(req_revision_id, resource.file_revision_id)
+        uploaded.append({
+            "mpn":         "parts_list",
+            "file":        parts_fname,
+            "resource_id": resource.resource_id,
+            "revision_id": resource.file_revision_id,
+            "req_ids":     [],
+        })
+        print(f"  ✓ {parts_fname}  →  resource_id={resource.resource_id}")
 
     # Bundle XML (all parts in one file)
     bundle_fname = "selected_parts_bundle.cis.xml"
