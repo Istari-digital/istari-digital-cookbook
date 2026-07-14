@@ -72,6 +72,14 @@ End with **Learn more** (doc links) and **Teardown (optional)** when the recipe 
 - **Connect** cell: load `samples/.env`, assert SDK/registry compatibility when using workflow or version-sensitive APIs
 - Keep imports in the cell that first needs them unless the repo pattern groups Connect imports together
 - Short comment only for non-obvious steps
+- Prefer **`istari_labs_helpers` fluent APIs** when the recipe already uses helpers — especially systems/branches/configurations:
+  - Prefer upload-then-track when you need the resource object: `report = platform.upload_model(...); branch.add_resource(report).save(); branch.advance_to(new_cfg)`
+  - `branch.configuration.add_file(...).save()` then `branch.advance_to(new_cfg)` is equivalent when you do not need the upload return value
+  - Do **not** hand-roll `create_snapshot` + `update_tag` in notebooks when those helpers cover the flow
+  - Do **not** re-find an uploaded model by scanning `get_models()` when you already have the upload return value
+  - Resolve a revision to its parent resource with `platform.get_resource_at_revision(revision_id)` (`doc.id` / `doc.revision_id`); use `doc.is_latest` / `doc.latest_revision` to detect newer content rather than ad-hoc revision-list scans
+  - Prefer model/artifact helpers: `is_model` / `is_artifact` (SDK resource type), `as_model()` / `as_artifact()`, `model.find_artifact(filename=…)` (avoids `list_model_jobs`), `artifact.job`, `job.get_sources()`; use `latest_completed_job` only when you need the job list itself
+  - Resolve branch models by filename with `branch.find_model(filename=…)` when the recipe names files explicitly
 
 ## Dependency groups (`pyproject.toml`)
 
@@ -79,6 +87,7 @@ End with **Learn more** (doc links) and **Teardown (optional)** when the recipe 
 |-------|--------|
 | `dev` | `istari-digital-client`, `python-dotenv`, notebook/lint tooling — most recipes |
 | `advanced` | `pandas`, `jinja2`, `matplotlib`, `numpy`, `pytest`, `ipython` — workflow-logs recipes only |
+| `ai` | `anthropic`, `istari-labs-helpers`, `pdfplumber`, `openpyxl`, `python-docx` — AI-assisted validation recipes only |
 
 Document the exact `uv sync --group …` command in Prerequisites.
 

@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ResourceView.is_model` / `is_artifact`**, **`as_model()` / `as_artifact()`** — classify by SDK resource type (`Model` / `Artifact`).
+- **`ResourceView.job`** — producing `JobView` for a revision with a Job parent, or `None`.
+- **`ModelView.find_artifact(filename=…)`** — named product from `model.artifacts` (no `list_model_jobs`).
+- **`JobView.tool_name`**, **`get_sources()`**, **`get_artifacts()`** — tool metadata, input resources, and Artifact products.
+- **`ModelView.latest_completed_job(tool_name, function_name)`** — most recent completed job for a tool/function pair **on this view's effective revision** (`model_revision_id` match). Prefer `find_artifact` when you only need a product.
+- **`BranchView.find_model(...)`** — resolve a model on the branch HEAD configuration.
+- **`BranchView.add_resource` / `BranchView.add_file`** — convenience wrappers that start from the branch HEAD configuration.
+- **`ConfigurationView.add_resource` / `TrackedFileSet.add_resource`** — track an already-uploaded `ResourceView` / `ModelView` by file id.
+- **`BranchView.configuration`** — configuration behind the branch HEAD snapshot.
+- **`BranchView.advance_to(configuration)`** — snapshot a configuration and move this branch tag to it.
+- **`IstariPlatform.get_resource_at_revision(revision_id)`** — parent resource pinned to that revision (`doc.id` / `doc.revision_id`).
+- **`ResourceView.is_latest`** — whether the effective revision is the resource's latest (`file.revisions[-1]`).
 - **`BranchView`** — wraps a snapshot tag (branch); `list_revisions()`, `download_resources()`.
 - **`SystemView.branches()` / `get_branch()` / `find_branch()`** — list and resolve branches (snapshot tags), not configurations.
 - **`BranchDownloadResult`** and branch download helpers — download file revisions at a branch HEAD: single file when there is one revision, `.zip` when there are several.
@@ -15,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`ConfigurationView.set_baseline()`** — creates a snapshot when needed before moving the baseline tag (so `save().set_baseline()` works without a prior snapshot).
 - **Branch downloads** — use the SDK branching API (`get_branch`, `list_branch_revisions`) instead of configuration tracked-file listings.
 
 - **`UserView.tools()`** — now returns tools this **user** may execute (permissions API), including when resolved via `get_user(email)`. Use `platform.tools()` for the full org catalog visible to your token.

@@ -14,36 +14,27 @@ Entity hierarchy
       |     +-- .configurations        -> list[ConfigurationView]
       |     +-- .branches()            -> list[BranchView]  (snapshot tags)
       |     +-- .get_branch()          -> BranchView
-      |     +-- .download_resources()  -> BranchDownloadResult (file or zip)
+      |     +-- .download_resources()  -> BranchDownloadResult (file or zip; optional depth)
       |     +-- .add_file / .add_revision
+      +-- BranchView          (wraps SnapshotTag — a branch)
+      |     +-- .list_revisions() / .subsystems() / .download_resources()
+      |     +-- .configuration         -> ConfigurationView (at branch HEAD)
+      |     +-- .advance_to(cfg)       -> self  (snapshot + move this branch tag)
       +-- SnapshotView        (wraps Snapshot)
       |     +-- .configuration         -> ConfigurationView
       +-- ConfigurationView   (wraps SystemConfiguration)
       |     +-- .get_models()          -> list[ModelView]
       |     +-- .get_tracked_files()   -> list[TrackedFile]
       |     +-- .add_file(fid)         -> TrackedFileSet  (builder)
-      |     +-- .set_baseline()        -> self  (moves system baseline here)
+      |     +-- .set_baseline()        -> self  (snapshot + move baseline tag)
       +-- TrackedFileSet        (builder for new configurations)
       |     +-- .add_file(fid)         -> self  (chainable)
       |     +-- .save(name=None)       -> ConfigurationView
-      +-- ModelView           (wraps Model + optional TrackedFile; extends ResourceView)
-      |     +-- .name / .id
-      |     +-- .current_revision_id / .pinned_revision_id
-      |     +-- .get_jobs() / .get_configurations()
-      |     +-- .download_artifacts() / .archive()
-      |     +-- .submit_job()          -> JobView
-      |     +-- .run_job()             -> JobView
-      +-- JobView             (wraps Job)
-      |     +-- .status / .created / .function_name
-      |     +-- .model_revision_id
-      |     +-- .revision              -> FileRevision (latest job-output revision)
-      |     +-- .get_products()        -> list[ResourceView]  (each pinned to the product's revision)
-      |     +-- .find_product()        -> ResourceView | None  (pinned)
-      |     +-- .wait()                -> self (chainable)
-      |     +-- .on_success()          -> self or raise
-      |     +-- .completed / .failed   bool properties
       +-- ResourceView        (unified wrapper for Artifact / Model / …)
-      |     +-- .id / .type / .raw / .file / .latest_revision
+      |     +-- .id / .type / .raw / .file / .latest_revision / .is_latest
+      |     +-- .is_model / .is_artifact / .as_model() / .as_artifact()
+      |     |     (SDK resource type: ``type == "Model"`` / ``"Artifact"``)
+      |     +-- .job                   -> JobView | None  (producing job, when Job parent)
       |     +-- .revision              -> FileRevision  (pinned if set, else latest)
       |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
       |     +-- .name / .filename / .mime / .file_id / .revision_id
@@ -53,6 +44,26 @@ Entity hierarchy
       |     +-- .get_lineage()         -> LineageNode  (backward provenance)
       |     +-- .submit_job(defn)      -> JobView  (auto-promotes Artifact resources)
       |     +-- .run_job(defn)         -> JobView  (submit + wait + on_success)
+      +-- ModelView           (wraps Model + optional TrackedFile; extends ResourceView)
+      |     +-- .name / .id
+      |     +-- .current_revision_id / .pinned_revision_id
+      |     +-- .find_artifact(filename=…)  -> ResourceView | None  (from model.artifacts; no jobs API)
+      |     +-- .get_jobs() / .latest_completed_job(tool, function)
+      |     |     (latest_completed_job is scoped to this view's effective revision)
+      |     +-- .get_configurations()
+      |     +-- .download_artifacts() / .archive()
+      |     +-- .submit_job()          -> JobView
+      |     +-- .run_job()             -> JobView
+      +-- JobView             (wraps Job)
+      |     +-- .status / .created / .function_name / .tool_name
+      |     +-- .model_revision_id
+      |     +-- .revision              -> FileRevision (latest job-output revision)
+      |     +-- .get_sources()         -> list[ResourceView]  (job inputs, e.g. Model)
+      |     +-- .get_products() / .get_artifacts()  -> list[ResourceView]
+      |     +-- .find_product()        -> ResourceView | None  (pinned)
+      |     +-- .wait()                -> self (chainable)
+      |     +-- .on_success()          -> self or raise
+      |     +-- .completed / .failed   bool properties
       +-- LineageNode         (one revision in a backward lineage tree)
             +-- .step          'upload' | 'job_run' | 'promotion' | 'derived'
             +-- .parents       list[LineageNode]  (recursive)
@@ -131,7 +142,7 @@ from istari_digital_client.v2.models import (
     Model, File, FileRevision, System, Job,
     Snapshot, SystemConfiguration, TrackedFile,
     NewTrackedFile, NewSystemConfiguration, TrackedFileSpecifierType,
-    UpdateTag,
+    NewSnapshot, UpdateTag,
 )
 from istari_digital_client import JobStatusName
 
@@ -142,6 +153,36 @@ from istari_labs_helpers.queries import ItemQuery, ResourceQuery, ToolQuery, Use
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _snapshot_configuration(
+    client: IstariClient,
+    configuration_id: str,
+    *,
+    system_id: str | None = None,
+) -> str:
+    """Create a snapshot of *configuration_id* and return its id.
+
+    When the platform returns a no-op (state already captured), fall back to
+    the newest snapshot for that configuration (optionally scoped by *system_id*).
+    """
+    resp = client.create_snapshot(configuration_id, new_snapshot=NewSnapshot())
+    for candidate in (getattr(resp, "actual_instance", None), resp):
+        if candidate is None:
+            continue
+        snapshot_id = getattr(candidate, "id", None)
+        if isinstance(snapshot_id, str) and snapshot_id:
+            return snapshot_id
+
+    kwargs: dict[str, Any] = {"configuration_id": configuration_id}
+    if system_id is not None:
+        kwargs["system_id"] = system_id
+    snapshots = _paginate_manually(client.list_snapshots, **kwargs)
+    if not snapshots and system_id is not None:
+        snapshots = _paginate_manually(client.list_snapshots, system_id=system_id)
+    if not snapshots:
+        raise ValueError(f"No snapshot found for configuration {configuration_id}")
+    return snapshots[0].id
+
 
 def _paginate_manually(
     list_func: Callable[..., Any],
@@ -194,17 +235,71 @@ def _wire_client(client: IstariClient, obj: Any) -> Any:
     return obj
 
 
-def _entries_for_branch(system: System, branch_name: str, client: IstariClient) -> list[tuple[str, bytes]]:
-    """Collect ``(filename, bytes)`` for every revision on a branch snapshot tag."""
+def _entries_for_snapshot(
+    system: System,
+    snapshot_id: str,
+    client: IstariClient,
+    *,
+    prefix: str = "",
+) -> list[tuple[str, bytes]]:
+    """Collect ``(filename, bytes)`` for every revision pinned on a snapshot."""
     _wire_client(client, system)
-    branch = system.get_branch(branch_name)
     entries: list[tuple[str, bytes]] = []
-    for item in system.list_branch_revisions(branch):
+    for item in system._iter_snapshot_revisions(snapshot_id):
         _wire_client(client, item)
-        name = _member_name_for_branch_revision(item)
+        name = prefix + _member_name_for_branch_revision(item)
         content = item.read_bytes()
         entries.append((name, content))
     return entries
+
+
+def _entries_at_snapshot_recursive(
+    system: System,
+    snapshot_id: str,
+    client: IstariClient,
+    *,
+    depth: int,
+    prefix: str = "",
+) -> list[tuple[str, bytes]]:
+    """Collect revisions at *snapshot_id* and, when *depth* > 1, nested subsystems."""
+    entries = _entries_for_snapshot(system, snapshot_id, client, prefix=prefix)
+    if depth <= 1:
+        return entries
+    _wire_client(client, system)
+    for sub in system._iter_snapshot_subsystems(snapshot_id):
+        sub_system = _wire_client(client, client.get_system(sub.system_id))
+        sub_prefix = f"{prefix}{sub.system_name}/"
+        entries.extend(
+            _entries_at_snapshot_recursive(
+                sub_system,
+                sub.tagged_snapshot_id,
+                client,
+                depth=depth - 1,
+                prefix=sub_prefix,
+            )
+        )
+    return entries
+
+
+def _entries_for_branch(
+    system: System,
+    branch_name: str,
+    client: IstariClient,
+    *,
+    depth: int = 1,
+) -> list[tuple[str, bytes]]:
+    """Collect ``(filename, bytes)`` for every revision on a branch snapshot tag."""
+    if depth < 1:
+        raise ValueError("depth must be >= 1")
+    _wire_client(client, system)
+    branch = system.get_branch(branch_name)
+    return _entries_at_snapshot_recursive(
+        system,
+        branch.snapshot_id,
+        client,
+        depth=depth,
+        prefix="",
+    )
 
 
 def _disambiguate_member_names(names: list[str]) -> list[str]:
@@ -783,6 +878,72 @@ class ResourceView:
             return res._resource_type
         return type(res).__name__
 
+    def _producing_job_id(self) -> str | None:
+        """Job resource id among this revision's sources, if any (no API call)."""
+        rev = self.revision
+        if rev is None:
+            return None
+        for src in rev.sources or []:
+            if getattr(src, "resource_type", None) == "Job" and getattr(src, "resource_id", None):
+                return src.resource_id
+        return None
+
+    @property
+    def is_artifact(self) -> bool:
+        """True when the SDK resource type is ``Artifact``."""
+        return self.type == "Artifact"
+
+    @property
+    def is_model(self) -> bool:
+        """True when the SDK resource type is ``Model``."""
+        return self.type == "Model"
+
+    def as_model(self) -> ModelView | None:
+        """Return a ``ModelView`` when :attr:`is_model`; otherwise ``None``.
+
+            m = resource.as_model()
+            if m is not None:
+                art = m.find_artifact(filename="text.txt")
+        """
+        if not self.is_model:
+            return None
+        if isinstance(self, ModelView):
+            return self
+        return ModelView(
+            _resource=self._resource,
+            _client=self._client,
+            _pinned_revision=self._pinned_revision,
+            _revision_loader=self._revision_loader,
+        )
+
+    def as_artifact(self) -> ResourceView | None:
+        """Return ``self`` when :attr:`is_artifact`; otherwise ``None``.
+
+            art = resource.as_artifact()
+            if art is not None:
+                job = art.job
+                parents = job.get_sources() if job else []
+        """
+        return self if self.is_artifact else None
+
+    @property
+    def job(self) -> JobView | None:
+        """Job that produced this view's effective revision, if any.
+
+        Looks up the ``Job`` parent from ``revision.sources``.  Typical for
+        Artifacts.  Returns ``None`` when there is no Job parent.
+        """
+        job_id = self._producing_job_id()
+        if not job_id:
+            return None
+        try:
+            return JobView(
+                _job=self._client.get_job(job_id),
+                _client=self._client,
+            )
+        except Exception:
+            return None
+
     @property
     def raw(self) -> Any:
         return self._resource
@@ -828,6 +989,26 @@ class ResourceView:
     def is_pinned(self) -> bool:
         """True when the view targets a specific revision (already loaded or still deferred)."""
         return self._pinned_revision is not None or self._revision_loader is not None
+
+    @property
+    def is_latest(self) -> bool:
+        """True when the effective revision is the resource's latest file revision.
+
+        Works for pinned and unpinned views: compares ``revision`` to
+        ``latest_revision`` (from ``file.revisions``).  Useful after
+        ``get_resource_at_revision`` to detect whether a newer revision exists::
+
+            doc = platform.get_resource_at_revision(prior_revision_id)
+            if not doc.is_latest:
+                use_id = doc.latest_revision.id
+        """
+        rev = self.revision
+        latest = self.latest_revision
+        return (
+            rev is not None
+            and latest is not None
+            and rev.id == latest.id
+        )
 
     def pin(self, revision: FileRevision | str) -> ResourceView:
         """Return a new view pinned to a specific revision (fetches if given an id)."""
@@ -1140,6 +1321,12 @@ class JobView:
         return self._job.function.name if self._job.function else "?"
 
     @property
+    def tool_name(self) -> str | None:
+        """Tool that ran this job (from ``function.tool_name``), or ``None``."""
+        fn = self._job.function
+        return getattr(fn, "tool_name", None) if fn else None
+
+    @property
     def status(self) -> str:
         latest = self._job.status_history[-1] if self._job.status_history else None
         return latest.name.value if latest else "unknown"
@@ -1165,6 +1352,38 @@ class JobView:
                     if src.resource_type == "Model":
                         return src.revision_id
         return None
+
+    def get_sources(self) -> list[ResourceView]:
+        """Return non-Job source resources that fed this job (typically Models).
+
+        Reads ``job.revision.sources`` and skips ``resource_type == "Job"``
+        (the parameters blob).  Each view is pinned to the source revision
+        when a revision id is present.
+        """
+        rev = self.revision
+        if rev is None:
+            return []
+        views: list[ResourceView] = []
+        for src in rev.sources or []:
+            rtype = getattr(src, "resource_type", None)
+            rid = getattr(src, "resource_id", None)
+            if not rtype or not rid or rtype == "Job":
+                continue
+            try:
+                resource = self._client.get_resource(rtype, rid)
+            except Exception:
+                continue
+            if resource is None:
+                continue
+            pinned = None
+            rev_id = getattr(src, "revision_id", None)
+            if rev_id:
+                try:
+                    pinned = self._client.get_revision(rev_id)
+                except Exception:
+                    pinned = None
+            views.append(_make_resource_view(resource, self._client, pinned_revision=pinned))
+        return views
 
     # -- actions ------------------------------------------------------------
 
@@ -1379,6 +1598,10 @@ class JobView:
                 return view
         return None
 
+    def get_artifacts(self) -> list[ResourceView]:
+        """Return Artifact products from this job (pinned ``ResourceView``s)."""
+        return self.get_products(resource_type="Artifact")
+
     def attach_file(
         self,
         file_path: str | Path,
@@ -1482,6 +1705,97 @@ class ModelView(ResourceView):
     def get_jobs(self, size: int = 100) -> list[JobView]:
         page = self._client.list_model_jobs(self.id, size=size)
         return [JobView(_job=j, _client=self._client) for j in page.iter_items()]
+
+    def find_artifact(
+        self,
+        *,
+        name: str | None = None,
+        filename: str | None = None,
+    ) -> ResourceView | None:
+        """Find an attached artifact by display name or filename.
+
+        Reads ``model.artifacts`` from the already-loaded Model (no
+        ``list_model_jobs`` round-trip).  Prefers an artifact whose Model
+        source revision matches this view's effective ``revision_id``.
+
+            art = model.find_artifact(filename="text.txt")
+            job = art.job if art else None
+        """
+        if not name and not filename:
+            raise ValueError("Provide name or filename")
+
+        artifacts = getattr(self._resource, "artifacts", None) or []
+        want_rev = self.revision_id
+        preferred: ResourceView | None = None
+        fallback: ResourceView | None = None
+
+        for raw_art in artifacts:
+            view = _make_resource_view(raw_art, self._client)
+            art_name = getattr(raw_art, "name", None) or view.name
+            art_filename = view.filename
+            if name and art_name != name and view.name != name:
+                continue
+            if filename and art_filename != filename and art_name != filename:
+                continue
+
+            # Prefer artifact produced from this model revision.
+            src_model_rev = None
+            rev = view.revision
+            if rev is not None:
+                for src in rev.sources or []:
+                    if (
+                        getattr(src, "resource_type", None) == "Model"
+                        and getattr(src, "resource_id", None) == self.id
+                    ):
+                        src_model_rev = getattr(src, "revision_id", None)
+                        break
+
+            if want_rev and src_model_rev == want_rev:
+                preferred = view
+                break
+            if fallback is None:
+                fallback = view
+
+        return preferred or fallback
+
+    def latest_completed_job(
+        self,
+        tool_name: str,
+        function_name: str,
+        *,
+        size: int = 100,
+    ) -> JobView | None:
+        """Most recent completed job for *tool_name* + *function_name* on **this revision**.
+
+        Only jobs whose ``model_revision_id`` equals this view's effective
+        ``revision_id`` are considered (pinned or latest).  Returns ``None``
+        when the view has no revision or no matching job.
+
+        Note: uses ``list_model_jobs``, which can be slow or fail on some
+        registries.  Prefer :meth:`find_artifact` when you only need a named
+        product.
+
+            job = model.pin(rev).latest_completed_job("open_pdf", "@istari:extract")
+        """
+        rev_id = self.revision_id
+        if rev_id is None:
+            return None
+
+        matches = [
+            j for j in self.get_jobs(size=size)
+            if j.completed
+            and j.function_name == function_name
+            and (j.tool_name or "") == tool_name
+            and j.model_revision_id == rev_id
+        ]
+        if not matches:
+            return None
+
+        def _created_at(j: JobView) -> datetime:
+            created = getattr(j.raw, "created", None)
+            return created if isinstance(created, datetime) else datetime.min
+
+        return max(matches, key=_created_at)
 
     def get_configurations(self) -> list[tuple[System, SystemConfiguration]]:
         """Find every (system, configuration) that tracks this model."""
@@ -1632,6 +1946,13 @@ class TrackedFileSet:
             file_id=file_id,
         ))
         return self
+
+    def add_resource(self, resource: "ResourceView | ModelView") -> "TrackedFileSet":
+        """Track an already-uploaded resource by its file id. Returns ``self``."""
+        file_id = resource.file_id
+        if not file_id:
+            raise ValueError(f"{resource.type} {resource.id} has no backing file to track")
+        return self.add_file(file_id)
 
     def add_revision(self, file_id: str, revision_id: str) -> TrackedFileSet:
         """Track a file pinned to a specific revision. Returns ``self`` for chaining."""
@@ -1805,6 +2126,17 @@ class ConfigurationView:
             version_name=version_name,
         )
 
+    def add_resource(self, resource: "ResourceView | ModelView") -> TrackedFileSet:
+        """Track an already-uploaded resource (Model / Artifact) by its file id.
+
+            report = platform.upload_model("report.html", external_id="…")
+            cfg.add_resource(report).save()
+        """
+        file_id = resource.file_id
+        if not file_id:
+            raise ValueError(f"{resource.type} {resource.id} has no backing file to track")
+        return self.add_file(file_id)
+
     def add_revision(self, file_id: str, revision_id: str) -> TrackedFileSet:
         """Start building a new configuration with a pinned revision (LOCKED)."""
         return TrackedFileSet(
@@ -1830,22 +2162,18 @@ class ConfigurationView:
         ).add_product_as_model(product, display_name=display_name, filename=filename, external_identifier=external_identifier)
 
     def set_baseline(self) -> ConfigurationView:
-        """Move the system's baseline tag to this configuration's snapshot.
+        """Snapshot this configuration (if needed) and move the system's baseline tag here.
 
         Returns ``self`` so the call can be chained::
 
             cfg.add_file(fid).save("v5").set_baseline()
         """
         system_id = self._config.system_id
-        snapshots = _paginate_manually(
-            self._client.list_snapshots,
-            configuration_id=self._config.id,
+        snapshot_id = _snapshot_configuration(
+            self._client, self._config.id, system_id=system_id
         )
-        if not snapshots:
-            raise ValueError(f"No snapshot found for configuration {self._config.id}")
-        snapshot = snapshots[0]
         baseline = self._client.get_system_baseline(system_id)
-        self._client.update_tag(baseline.tag_id, UpdateTag(snapshot_id=snapshot.id))
+        self._client.update_tag(baseline.tag_id, UpdateTag(snapshot_id=snapshot_id))
         return self
 
     # -- mutations ----------------------------------------------------------
@@ -1889,6 +2217,68 @@ class SnapshotView:
 
 
 # ---------------------------------------------------------------------------
+# SubsystemView  —  child system linked at a branch snapshot
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SubsystemView:
+    """Fluent wrapper around a :class:`~istari_digital_client.v2.models.snapshot_subsystem_item.SnapshotSubsystemItem`.
+
+    Subsystems are other systems pinned to a parent branch's snapshot.  Use
+    :meth:`as_system` to load the child system for further inspection.
+    """
+
+    _item: Any = field(repr=False)
+    _parent_system: System = field(repr=False)
+    _client: IstariClient = field(repr=False)
+
+    def __repr__(self) -> str:
+        archived = "archived" if self.is_archived else "active"
+        return f"Subsystem({self.system_name!r}, {archived}, snapshot={self.snapshot_id})"
+
+    @property
+    def system_id(self) -> str:
+        return self._item.system_id
+
+    @property
+    def system_name(self) -> str:
+        return self._item.system_name
+
+    @property
+    def system_description(self) -> str | None:
+        return self._item.system_description
+
+    @property
+    def tag_id(self) -> str:
+        return self._item.tag_id
+
+    @property
+    def configuration_id(self) -> str:
+        return self._item.tagged_configuration_id
+
+    @property
+    def configuration_name(self) -> str:
+        return self._item.tagged_configuration_name
+
+    @property
+    def snapshot_id(self) -> str:
+        return self._item.tagged_snapshot_id
+
+    @property
+    def is_archived(self) -> bool:
+        return self._item.is_archived
+
+    @property
+    def raw(self) -> Any:
+        return self._item
+
+    def as_system(self) -> "SystemView":
+        """Load the linked child system."""
+        system = self._client.get_system(self.system_id)
+        return SystemView(_system=system, _client=self._client)
+
+
+# ---------------------------------------------------------------------------
 # BranchView  —  snapshot tag (branch) on a system
 # ---------------------------------------------------------------------------
 
@@ -1929,15 +2319,119 @@ class BranchView:
     def raw(self) -> Any:
         return self._tag
 
+    @property
+    def configuration(self) -> ConfigurationView:
+        """Configuration behind this branch's current snapshot HEAD."""
+        snap = self._client.get_snapshot(self.snapshot_id)
+        system = self._client.get_system(self._system.id)
+        match = next(
+            (c for c in system.configurations or [] if c.id == snap.configuration_id),
+            None,
+        )
+        if match is None:
+            raise ValueError(
+                f"Configuration {snap.configuration_id} for branch {self.name!r} "
+                f"not found on system {system.name!r}"
+            )
+        return ConfigurationView(_config=match, _client=self._client)
+
+    def add_resource(self, resource: "ResourceView | ModelView") -> TrackedFileSet:
+        """Track an uploaded resource on this branch's configuration.
+
+            report = platform.upload_model("report.html", external_id="…")
+            new_cfg = branch.add_resource(report).save()
+            branch.advance_to(new_cfg)
+        """
+        return self.configuration.add_resource(resource)
+
+    def add_file(
+        self,
+        file_id: str | None = None,
+        *,
+        path: str | Path | None = None,
+        display_name: str | None = None,
+        external_identifier: str | None = None,
+        version_name: str | None = None,
+    ) -> TrackedFileSet:
+        """Start a new configuration from this branch HEAD with an added file."""
+        return self.configuration.add_file(
+            file_id,
+            path=path,
+            display_name=display_name,
+            external_identifier=external_identifier,
+            version_name=version_name,
+        )
+
+    def find_model(
+        self,
+        *,
+        name: str | None = None,
+        filename: str | None = None,
+        external_id: str | None = None,
+    ) -> ModelView | None:
+        """Find a tracked model on this branch HEAD (by name, filename, or external id).
+
+            model = branch.find_model(filename="Warthrop_ICD_Rev3.pdf")
+        """
+        return self.configuration.find_model(
+            name=name,
+            filename=filename,
+            external_id=external_id,
+        )
+
     def list_revisions(self) -> list[Any]:
         """File revisions tracked at this branch's current snapshot."""
         _wire_client(self._client, self._system)
         items = self._system.list_branch_revisions(self._tag)
         return [_wire_client(self._client, item) for item in items]
 
-    def download_resources(self, dest: str | Path | None = None) -> BranchDownloadResult:
-        """Download every revision on this branch (single file or zip)."""
-        entries = _entries_for_branch(self._system, self.name, self._client)
+    def subsystems(self) -> list[SubsystemView]:
+        """Child systems linked at this branch's current snapshot.
+
+            for sub in branch.subsystems():
+                print(sub.system_name, sub.configuration_name)
+        """
+        s = _wire_client(self._client, self._system)
+        items = s.list_branch_subsystems(self._tag)
+        return [
+            SubsystemView(_item=item, _parent_system=s, _client=self._client)
+            for item in items
+        ]
+
+    def advance_to(self, configuration: ConfigurationView) -> "BranchView":
+        """Snapshot *configuration* and point this branch's tag at that snapshot.
+
+            branch = system.get_branch("baseline")
+            new_cfg = branch.configuration.add_file(path="report.html").save()
+            branch.advance_to(new_cfg)
+        """
+        snapshot_id = _snapshot_configuration(
+            self._client,
+            configuration.id,
+            system_id=self._system.id,
+        )
+        self._client.update_tag(self.id, UpdateTag(snapshot_id=snapshot_id))
+        # Refresh the wrapped tag so snapshot_id reflects the new HEAD.
+        s = _wire_client(self._client, self._system)
+        self._tag = s.get_branch(self.name)
+        self._system = s
+        return self
+
+    def download_resources(
+        self,
+        dest: str | Path | None = None,
+        *,
+        depth: int = 1,
+    ) -> BranchDownloadResult:
+        """Download revisions on this branch (single file or zip).
+
+        *depth* controls how many subsystem levels to include:
+
+        - ``1`` (default) — this branch only
+        - ``2`` — branch plus direct subsystems
+        - ``3+`` — deeper nesting (subsystem paths use ``<name>/`` prefixes)
+        """
+        entries = _entries_for_branch(self._system, self.name, self._client, depth=depth)
         stem = f"{self._system.name}_{self.name}".replace(" ", "_")
         return _write_branch_download(entries, dest=Path(dest) if dest else None, default_stem=stem)
 
@@ -2015,12 +2509,15 @@ class SystemView:
         self,
         branch: str,
         dest: str | Path | None = None,
+        *,
+        depth: int = 1,
     ) -> BranchDownloadResult:
         """Download all file revisions on *branch* (snapshot tag name).
 
             result = system.download_resources("baseline", dest="./exports")
+            result = system.download_resources("baseline", dest="./exports", depth=2)
         """
-        return self.get_branch(branch).download_resources(dest)
+        return self.get_branch(branch).download_resources(dest, depth=depth)
 
     def find_configuration(self, name: str) -> ConfigurationView | None:
         """Find a configuration by name, or ``None``."""
@@ -2313,11 +2810,14 @@ class IstariPlatform:
         system_id: str,
         branch: str,
         dest: str | Path | None = None,
+        *,
+        depth: int = 1,
     ) -> BranchDownloadResult:
         """Download all file revisions on a system branch (snapshot tag).
 
         Writes a **single file** when the branch has one revision,
-        otherwise a **zip** archive.
+        otherwise a **zip** archive.  Set *depth* > 1 to include nested
+        subsystem resources (see :meth:`BranchView.download_resources`).
 
             result = platform.download_system_resources(
                 "92f95bf5-6c46-4e8d-a1e9-1cda4dd7eb3a",
@@ -2326,7 +2826,7 @@ class IstariPlatform:
             )
             print(result.path)
         """
-        return self.get_system_by_id(system_id).download_resources(branch, dest=dest)
+        return self.get_system_by_id(system_id).download_resources(branch, dest=dest, depth=depth)
 
     def get_or_create_system(
         self,
@@ -2387,6 +2887,30 @@ class IstariPlatform:
     def get_revision(self, revision_id: str) -> FileRevision:
         """Return a single file revision by id (for downloads / lineage checks)."""
         return self._client.get_revision(revision_id)
+
+    def get_resource_at_revision(self, revision_id: str) -> ResourceView | ModelView:
+        """Load the resource that owns *revision_id*, pinned to that revision.
+
+        ``FileRevision`` exposes the revision UUID as ``.id`` and the parent
+        resource via ``.resource`` / ``.file.resource_id`` (there is no
+        ``.parent``).  This helper returns a :class:`ResourceView` (or
+        :class:`ModelView`) so callers can use:
+
+            doc = platform.get_resource_at_revision(revision_id)
+            doc.id            # resource (Model / Artifact) UUID
+            doc.revision_id   # file-revision UUID
+            doc.read_bytes()  # content of that exact revision
+        """
+        rev = self.get_revision(revision_id)
+        file_obj = rev.file or self._client.get_file(rev.file_id)
+        resource_id = getattr(file_obj, "resource_id", None)
+        resource_type = getattr(file_obj, "resource_type", None)
+        if not resource_id or not resource_type:
+            raise ValueError(
+                f"Revision {revision_id!r} has no parent resource "
+                f"(file_id={getattr(rev, 'file_id', None)!r})"
+            )
+        return self.get_resource(resource_type, resource_id).pin(rev)
 
     def put_text_file(
         self,

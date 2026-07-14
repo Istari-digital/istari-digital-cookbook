@@ -62,7 +62,10 @@ IstariPlatform                (entry point)
   |     +-- .download_resources()    -> BranchDownloadResult
   +-- BranchView              (wraps SnapshotTag — a branch)
   |     +-- .list_revisions()        -> list[SnapshotRevisionSearchItem]
+  |     +-- .configuration           -> ConfigurationView
+  |     +-- .advance_to(cfg)         -> self
   |     +-- .download_resources()    -> BranchDownloadResult
+  |     +-- .subsystems()            -> list[SubsystemView]
   +-- SnapshotView            (wraps Snapshot)
   |     +-- .configuration           -> ConfigurationView
   +-- ConfigurationView       (wraps SystemConfiguration)
@@ -76,7 +79,7 @@ IstariPlatform                (entry point)
   |     +-- .save(name=None)         -> ConfigurationView
   +-- ResourceView            (unified wrapper over any Resource: Artifact, Model, ...)
   |     +-- .name / .filename / .mime / .file_id / .revision_id
-  |     +-- .revision / .latest_revision / .pin(rev) / .unpinned
+  |     +-- .revision / .latest_revision / .is_latest / .pin(rev) / .unpinned
   |     +-- .read_bytes() / .read_text() / .download(dest)
   |     +-- .as_source()             -> NewSource (chain into next job)
   |     +-- .promote()               -> ModelView (tag: "promoted_from")
@@ -153,17 +156,18 @@ new_cfg = cfg.add_file(
 ).save()
 ```
 
-### Add multiple files and set as baseline
+### Add a file on a branch and advance the branch HEAD
 
 ```python
-new_cfg = (
-    cfg
-    .add_file(path="resources/file_a.mdzip", display_name="File A")
-    .add_file(path="resources/file_b.mdzip", display_name="File B")
-    .save("v5")
-    .set_baseline()
-)
+branch = system.get_branch("baseline")  # or any snapshot tag name
+new_cfg = branch.configuration.add_file(
+    path="report.html",
+    display_name="report.html",
+).save()
+branch.advance_to(new_cfg)  # snapshot + move this branch tag
 ```
+
+For the baseline tag only, `save().set_baseline()` is equivalent.
 
 ### Find a model with the lazy resource query
 
@@ -233,6 +237,13 @@ labelled `"promoted_from"`), then the job runs on the promoted Model.
 item  = platform.resources().type("model").filter(display_name="MQ-99 SFR").first()
 model = platform.get_model(item.id)
 job = model.run_job(JobDefinition(function="@istari:extract", tool_name="cameo"))
+
+# Or find a named extract product without listing jobs
+art = model.find_artifact(filename="text.txt")
+
+# SDK resource type: Artifact vs Model
+if art and art.is_artifact:
+    parents = art.job.get_sources() if art.job else []
 
 # Artifact -- auto-promoted under the hood
 artifact = job.find_product(filename="extraction_output.json")   # pinned ResourceView
