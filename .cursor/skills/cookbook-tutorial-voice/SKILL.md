@@ -78,6 +78,8 @@ End with **Learn more** (doc links) and **Teardown (optional)** when the recipe 
   - Do **not** hand-roll `create_snapshot` + `update_tag` in notebooks when those helpers cover the flow
   - Do **not** re-find an uploaded model by scanning `get_models()` when you already have the upload return value
   - Resolve a revision to its parent resource with `platform.get_resource_at_revision(revision_id)` (`doc.id` / `doc.revision_id`); use `doc.is_latest` / `doc.latest_revision` to detect newer content rather than ad-hoc revision-list scans
+  - Prefer model/artifact helpers: `is_model` / `is_artifact` (SDK resource type), `as_model()` / `as_artifact()`, `model.find_artifact(filename=…)` (avoids `list_model_jobs`), `artifact.job`, `job.get_sources()`; use `latest_completed_job` only when you need the job list itself
+  - Resolve branch models by filename with `branch.find_model(filename=…)` when the recipe names files explicitly
 
 ## Dependency groups (`pyproject.toml`)
 
