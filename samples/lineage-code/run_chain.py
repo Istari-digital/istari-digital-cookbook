@@ -49,7 +49,7 @@ from pathlib import Path
 from istari_digital_client import Client, Configuration, JobStatusName
 from istari_digital_client.v2.models.new_source import NewSource
 
-XLSX_PATH = Path("/Users/rossbillings/git/istari-digital-cookbook/samples/Group3-UAS-Requirements.xlsx")
+XLSX_PATH = Path(__file__).resolve().parent.parent / "Group3-UAS-Requirements.xlsx"
 EXTERNAL_ID = "sdk-tutorial-uas-requirements"
 DISPLAY_NAME = "Group3-UAS-Requirements (tutorial sdk)"
 FUNCTION = "@istari:extract"
@@ -79,12 +79,15 @@ def require_completed(job):
     return job
 
 
-def find_product_by_filename(client: Client, job, filename: str):
-    job = client.get_job(job.id)
+def find_product_by_filename(job, filename: str):
+    """Find a product on the job's latest revision matching ``filename``.
+
+    Caller passes a completed job (its file.revisions list is already
+    populated); no re-fetch needed.
+    """
     if not job.file or not job.file.revisions:
         return None, None
-    rev = job.file.revision
-    for p in rev.products or []:
+    for p in job.file.revisions[-1].products or []:
         if p.resource_type and p.resource_id and p.revision_id:
             rrev = p.revision
             if rrev is not None and rrev.name == filename:
@@ -95,21 +98,14 @@ def find_product_by_filename(client: Client, job, filename: str):
 def promote_revision_to_model(client: Client, revision):
     content = client.read_contents(token=revision.content_token)
     upload_name = revision.name or f"promote-{revision.id}.xlsx"
-    tmp_dir = tempfile.mkdtemp(prefix="istari_promote_")
-    tmp_path = os.path.join(tmp_dir, upload_name)
-    try:
-        with open(tmp_path, "wb") as f:
-            f.write(content)
+    with tempfile.TemporaryDirectory(prefix="istari_promote_") as tmp_dir:
+        tmp_path = Path(tmp_dir) / upload_name
+        tmp_path.write_bytes(content)
         return client.add_model(
-            path=tmp_path,
+            path=str(tmp_path),
             display_name=Path(upload_name).stem,
             sources=[NewSource(revision_id=revision.id, relationship_identifier="promoted_from")],
         )
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        if os.path.isdir(tmp_dir):
-            os.rmdir(tmp_dir)
 
 
 def main() -> int:
@@ -141,7 +137,7 @@ def main() -> int:
     job1 = require_completed(wait_job(client, job1_raw.id))
     print(f"    job1 COMPLETED")
 
-    wb_p, wb_rev = find_product_by_filename(client, job1, "workbook.xlsx")
+    wb_p, wb_rev = find_product_by_filename(job1, "workbook.xlsx")
     if wb_rev is None:
         print("ERROR: job1 did not produce workbook.xlsx", file=sys.stderr)
         return 3
@@ -157,7 +153,7 @@ def main() -> int:
     job2 = require_completed(wait_job(client, job2_raw.id))
     print(f"    job2 COMPLETED")
 
-    final_p, final_rev = find_product_by_filename(client, job2, "named_cells.json")
+    final_p, final_rev = find_product_by_filename(job2, "named_cells.json")
     if final_rev is None:
         print("ERROR: job2 did not produce named_cells.json", file=sys.stderr)
         return 3

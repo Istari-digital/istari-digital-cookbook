@@ -32,7 +32,14 @@ The notebooks cover the same platform concepts whether they use **`istari_labs_h
 | [`samples/misc_recipes.ipynb`](samples/misc_recipes.ipynb) | `istari_labs_helpers` | Short, independent snippets (agents, resources, archiving, and similar). |
 | [`samples/resources/using-resources.ipynb`](samples/resources/using-resources.ipynb) | Official client (`V3Client` + v2 `Client`) | Files (resources): upload, search, versions, comments, sharing, and cleanup. |
 | [`samples/resources/connect-resources-twc.ipynb`](samples/resources/connect-resources-twc.ipynb) | Official client (`istari_digital_client`) | Teamwork Cloud: upload pointer file (connected `mdel://` link), TWC auth, `@istari:twc_extract`. |
+| [`samples/resources/connect-resources-catia-3dx.ipynb`](samples/resources/connect-resources-catia-3dx.ipynb) | Official client (`istari_digital_client`) | 3DEXPERIENCE CATIA: register connected pointer, run `@istari:extract`. |
+| [`samples/cad/update_catia_parameter.ipynb`](samples/cad/update_catia_parameter.ipynb) | `istari_labs_helpers` | Update a CATIA parameter via `@istari:update_parameters` (resource ID as input). |
+| [`samples/resources/download-system-resources.ipynb`](samples/resources/download-system-resources.ipynb) | `istari_labs_helpers` | Download all tracked resources on a system branch (file or zip). |
+| [`samples/validation/ai-validation.ipynb`](samples/validation/ai-validation.ipynb) | `istari_labs_helpers` + Anthropic | Compare extract artifacts from two named models with Claude, write an HTML report with lineage, track it on the system branch. `uv sync --group dev --group ai`. |
+| [`samples/validation/ui-sample.ipynb`](samples/validation/ui-sample.ipynb) | ipywidgets | Notebook form: pick a `(label, id)` from a dropdown and reuse the selection in later cells. |
 | [`samples/org-admin/org-admin-tasks.ipynb`](samples/org-admin/org-admin-tasks.ipynb) | Official client (`istari_digital_client`) | Org admin: find user by email, list tools, grant executor access to all tools. |
+| [`samples/workflow-logs/workflow_log_scenario_a.ipynb`](samples/workflow-logs/workflow_log_scenario_a.ipynb) | Official client (`istari_digital_client` + `V3Client`) | External workflow logs — Scenario A: verification battery, fail/revise/pass loop. Registry Service **> 10.17.3** (2026-05+). `uv sync --group dev --group advanced`. |
+| [`samples/workflow-logs/workflow_log_scenario_b.ipynb`](samples/workflow-logs/workflow_log_scenario_b.ipynb) | Official client (`istari_digital_client` + `V3Client`) | External workflow logs — Scenario B: pytest tradespace sweep and campaign entries. Registry Service **> 10.17.3** (2026-05+). `uv sync --group dev --group advanced`. |
 | [`samples/resources/resources_misc_labs_helpers.ipynb`](samples/resources/resources_misc_labs_helpers.ipynb) | `istari_labs_helpers` | Model registration, text uploads, search, and bulk patterns for platform resources. |
 | [`samples/workflow-log/workflow_log_demo.ipynb`](samples/workflow-log/workflow_log_demo.ipynb) | Official client (`V3Client` + v2 `Client`) | External workflow logs: capture outside-Istari runs (workflow outputs + pass/fail log entries) against a system configuration — a design loop and a tradespace sweep. |
 | [`integrations/basic_catia_catpart_extraction.ipynb`](integrations/basic_catia_catpart_extraction.ipynb) | Official client (`istari_digital`) | Extract metadata from a CATIA `.CATPart`. |
@@ -44,6 +51,46 @@ Each notebook is self-contained and explains its own setup in the first cell —
 - Access to an **Istari Digital instance**
 - A **Personal Access Token**. See [Personal Access Tokens](https://docs.istaridigital.com/users/user-guide/settings#developer-settings--personal-access-tokens).
 - A [supported Python version](https://pypi.org/project/istari-digital-client/) (see the classifiers on the `istari-digital-client` PyPI page), and [uv](https://docs.astral.sh/uv/) (recommended) or `pip` for installing dependencies.
+
+From the cookbook root, install notebook dependencies (most recipes):
+
+```bash
+uv sync --group dev
+```
+
+Workflow-logs recipes also need `--group advanced`. The AI validation recipe needs `--group ai` (Anthropic SDK + `istari-labs-helpers`). See each notebook’s prerequisites cell for the exact command.
+
+Match the installed **`istari-digital-client`** version to your Istari Digital Platform release — see [Python client version](#python-client-version) below.
+
+## Python client version
+
+Cookbook notebooks depend on **`istari-digital-client`** from the root [`pyproject.toml`](pyproject.toml) (`dev` dependency group). The pinned version should match the Python SDK shipped with your Istari Digital Platform release.
+
+### Which version to use
+
+Open the release notes for your Istari Digital Platform version in the [Istari Digital documentation](https://docs.istaridigital.com) (**Releases** in the sidebar — for example [2026.05.01](https://docs.istaridigital.com/releases/2026-05-01-Release) or [2026.04.01](https://docs.istaridigital.com/2026.04/releases/2026-04-01-Release)). Under **Assets → SDK Clients**, note the **Python** version — that is the `istari-digital-client` release to install.
+
+At runtime, `Client.check_compatibility()` reports the registry’s expected client version as `server_version`; your installed package should match it before you call version-sensitive APIs.
+
+### Update the pin for notebooks
+
+From the cookbook root:
+
+1. Edit the pin in [`pyproject.toml`](pyproject.toml) (`dependency-groups.dev`, key `istari-digital-client`), or run:
+
+   ```bash
+   uv add --group dev "istari-digital-client==<version-from-release-notes>"
+   ```
+
+2. Refresh the environment:
+
+   ```bash
+   uv sync --group dev
+   ```
+
+3. **Restart the Jupyter kernel** so notebooks pick up the new package.
+
+If you use `istari_labs_helpers` via `uv sync --project istari-labs-helpers --extra experiment`, run a cookbook-root `uv sync --group dev` first (or reinstall the client explicitly) so the helper venv gets the same `istari-digital-client` version.
 
 ## Repository layout
 

@@ -82,6 +82,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+samples/workflow-logs/_notebook_run/
 
 # Scratch dirs written by samples/workflow-log/workflow_log_demo.ipynb
 _notebook_run/
@@ -183,3 +184,4 @@ cython_debug/
 
 # JetBrains IDE settings
 .idea/
+samples/.DS_Store

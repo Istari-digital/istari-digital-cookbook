@@ -1,0 +1,19 @@
+---
+description: Public tutorial voice for istari-digital-client-cookbook samples and README
+globs: samples/**/*.ipynb,README.md,samples/**/*
+alwaysApply: false
+---
+
+# Cookbook tutorial standards
+
+When editing cookbook notebooks, sample markdown, or README recipe entries, follow the **cookbook-tutorial-voice** skill (`.cursor/skills/cookbook-tutorial-voice/SKILL.md`).
+
+Align terminology and tone with Istari Digital documentation: `../istari-documentation/.cursor/rules/documentation-standards.mdc`.
+
+**Quick rules:**
+
+- Tutorials: numbered "You will" outcomes, concise section intros, pause callouts for web app checks
+- **Istari Digital** / **Istari Digital web app** / **Istari Digital Platform** — use precisely
+- Prerequisites must show the correct `uv sync --group dev` (and `--group advanced` for workflow-logs)
+- Link to `docs.istaridigital.com` for concepts covered in official guides
+- Split large walkthroughs into focused notebooks rather than one long demo

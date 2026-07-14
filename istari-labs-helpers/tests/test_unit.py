@@ -533,6 +533,249 @@ class TestResourceViewPinned:
         assert src.relationship_identifier == "input"
         client.get_revision.assert_not_called()
 
+    def test_is_latest_true_when_pin_is_only_revision(self):
+        view, _ = _make_pinned_product_view(revision_id="rev-1")
+        # Helper leaves file.revisions empty; attach the pin as the sole revision.
+        view.file.revisions = [view.revision]
+        assert view.is_latest is True
+
+    def test_is_latest_false_when_newer_revision_exists(self):
+        older = MagicMock()
+        older.id = "rev-old"
+        newer = MagicMock()
+        newer.id = "rev-new"
+        resource = MagicMock()
+        resource.id = "mod-1"
+        resource.file = MagicMock()
+        resource.file.revisions = [older, newer]
+        view = ResourceView(
+            _resource=resource,
+            _client=MagicMock(),
+            _pinned_revision=older,
+        )
+        assert view.is_latest is False
+        assert view.latest_revision.id == "rev-new"
+        assert view.revision_id == "rev-old"
+
+    def test_is_artifact_and_as_artifact(self):
+        view, _ = _make_pinned_product_view(resource_type="Artifact")
+        view.revision.sources = []
+        assert view.is_artifact is True
+        assert view.is_model is False
+        assert view.as_artifact() is view
+        assert view.as_model() is None
+
+    def test_as_model_returns_model_view(self):
+        model = _make_model("mod-1", "Doc")
+        typed = ModelView(_resource=model, _client=MagicMock())
+        assert typed.is_model is True
+        assert typed.is_artifact is False
+        assert typed.as_model() is typed
+        assert typed.as_artifact() is None
+
+    def test_job_returns_producing_job(self):
+        view, client = _make_pinned_product_view(resource_type="Artifact")
+        src = MagicMock()
+        src.resource_type = "Job"
+        src.resource_id = "job-99"
+        view.revision.sources = [src]
+        client.get_job.return_value = _make_job(JobStatusName.COMPLETED)
+        client.get_job.return_value.id = "job-99"
+        jv = view.job
+        assert jv is not None
+        assert jv.id == "job-99"
+        client.get_job.assert_called_once_with("job-99")
+
+    def test_job_none_when_no_job_source(self):
+        view, _ = _make_pinned_product_view(resource_type="Artifact")
+        view.revision.sources = []
+        assert view.job is None
+
+    def test_find_artifact_prefers_matching_model_revision(self):
+        model = _make_model("mod-1", "Doc")
+        model.file.revisions[0].id = "mrev-current"
+
+        # Artifact for an older model revision
+        old_art, _ = _make_pinned_product_view(
+            resource_type="Artifact", resource_id="art-old", name="text.txt", revision_id="arev-old"
+        )
+        old_src_model = MagicMock()
+        old_src_model.resource_type = "Model"
+        old_src_model.resource_id = "mod-1"
+        old_src_model.revision_id = "mrev-old"
+        old_art.revision.sources = [old_src_model]
+        old_raw = old_art.raw
+        old_raw.name = "text.txt"
+        old_raw.file.revisions = [old_art.revision]
+
+        # Artifact for the current model revision
+        new_art, _ = _make_pinned_product_view(
+            resource_type="Artifact", resource_id="art-new", name="text.txt", revision_id="arev-new"
+        )
+        new_src_model = MagicMock()
+        new_src_model.resource_type = "Model"
+        new_src_model.resource_id = "mod-1"
+        new_src_model.revision_id = "mrev-current"
+        new_art.revision.sources = [new_src_model]
+        new_raw = new_art.raw
+        new_raw.name = "text.txt"
+        new_raw.file.revisions = [new_art.revision]
+
+        object.__setattr__(model, "artifacts", [old_raw, new_raw])
+        mv = ModelView(_resource=model, _client=MagicMock())
+        hit = mv.find_artifact(filename="text.txt")
+        assert hit is not None
+        assert hit.id == "art-new"
+        assert hit.revision_id == "arev-new"
+
+    def test_find_artifact_none_when_missing(self):
+        model = _make_model("mod-1", "Doc")
+        object.__setattr__(model, "artifacts", [])
+        mv = ModelView(_resource=model, _client=MagicMock())
+        assert mv.find_artifact(filename="text.txt") is None
+
+
+
+# ---------------------------------------------------------------------------
+# JobView sources / ModelView.latest_completed_job
+# ---------------------------------------------------------------------------
+
+class TestJobSourcesAndLatestCompleted:
+    def test_tool_name_from_function(self):
+        job = _make_job()
+        job.function.tool_name = "open_pdf"
+        jv = JobView(_job=job, _client=MagicMock())
+        assert jv.tool_name == "open_pdf"
+        assert jv.function_name == "@test:fn"
+
+    def test_get_sources_skips_job_and_pins_model(self):
+        job = _make_job()
+        rev = MagicMock()
+        model_src = MagicMock()
+        model_src.resource_type = "Model"
+        model_src.resource_id = "mod-1"
+        model_src.revision_id = "mrev-1"
+        job_src = MagicMock()
+        job_src.resource_type = "Job"
+        job_src.resource_id = "job-1"
+        rev.sources = [model_src, job_src]
+        rev.products = []
+        job.file = MagicMock()
+        job.file.revisions = [rev]
+
+        client = MagicMock()
+        model = _make_model("mod-1")
+        # Pinned model revision has no Job parent → heuristic is_model.
+        pinned = MagicMock()
+        pinned.id = "mrev-1"
+        pinned.sources = []
+        client.get_resource.return_value = model
+        client.get_revision.return_value = pinned
+
+        jv = JobView(_job=job, _client=client)
+        sources = jv.get_sources()
+        assert len(sources) == 1
+        assert sources[0].is_model
+        assert sources[0].revision_id == "mrev-1"
+        client.get_resource.assert_called_once_with("Model", "mod-1")
+
+    def test_get_artifacts_filters_products(self):
+        p, resource, rev = _make_product_record(name="text.txt")
+        job = _make_job_with_products("job-1", [p])
+        client = MagicMock()
+        client.get_resource.return_value = resource
+        client.get_revision.return_value = rev
+        jv = JobView(_job=job, _client=client)
+        arts = jv.get_artifacts()
+        assert len(arts) == 1
+        assert arts[0].filename == "text.txt"
+
+    def _job_on_model_revision(self, job_id, status, *, model_rev_id, tool, function, created):
+        job = _make_job(status)
+        job.id = job_id
+        job.function.name = function
+        job.function.tool_name = tool
+        job.created = created
+        src = MagicMock()
+        src.resource_type = "Model"
+        src.revision_id = model_rev_id
+        rev = MagicMock()
+        rev.sources = [src]
+        rev.products = []
+        job.file = MagicMock()
+        job.file.revisions = [rev]
+        return job
+
+    def test_latest_completed_job_picks_newest_match_for_this_revision(self):
+        from datetime import datetime, timezone
+
+        rev_id = "rev-mod-1"
+        older = self._job_on_model_revision(
+            "old", JobStatusName.COMPLETED,
+            model_rev_id=rev_id, tool="open_pdf", function="@istari:extract",
+            created=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        newer = self._job_on_model_revision(
+            "new", JobStatusName.COMPLETED,
+            model_rev_id=rev_id, tool="open_pdf", function="@istari:extract",
+            created=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        failed = self._job_on_model_revision(
+            "fail", JobStatusName.FAILED,
+            model_rev_id=rev_id, tool="open_pdf", function="@istari:extract",
+            created=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+        other_tool = self._job_on_model_revision(
+            "other", JobStatusName.COMPLETED,
+            model_rev_id=rev_id, tool="cameo", function="@istari:extract",
+            created=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        other_rev = self._job_on_model_revision(
+            "other-rev", JobStatusName.COMPLETED,
+            model_rev_id="rev-other", tool="open_pdf", function="@istari:extract",
+            created=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+        page = MagicMock()
+        page.iter_items.return_value = [older, newer, failed, other_tool, other_rev]
+        client = MagicMock()
+        client.list_model_jobs.return_value = page
+
+        model = _make_model("mod-1")
+        model.file.revisions[0].id = rev_id
+        model.file.revisions[0].sources = []
+        mv = ModelView(_resource=model, _client=client)
+        hit = mv.latest_completed_job("open_pdf", "@istari:extract")
+        assert hit is not None
+        assert hit.id == "new"
+
+    def test_latest_completed_job_none_when_no_job_on_this_revision(self):
+        from datetime import datetime, timezone
+
+        only_other = self._job_on_model_revision(
+            "other-rev", JobStatusName.COMPLETED,
+            model_rev_id="rev-other", tool="open_pdf", function="@istari:extract",
+            created=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        page = MagicMock()
+        page.iter_items.return_value = [only_other]
+        client = MagicMock()
+        client.list_model_jobs.return_value = page
+
+        model = _make_model("mod-1")
+        model.file.revisions[0].id = "rev-mod-1"
+        model.file.revisions[0].sources = []
+        mv = ModelView(_resource=model, _client=client)
+        assert mv.latest_completed_job("open_pdf", "@istari:extract") is None
+
+    def test_latest_completed_job_none_when_no_match(self):
+        page = MagicMock()
+        page.iter_items.return_value = []
+        client = MagicMock()
+        client.list_model_jobs.return_value = page
+        mv = ModelView(_resource=_make_model("mod-1"), _client=client)
+        assert mv.latest_completed_job("open_pdf", "@istari:extract") is None
+
 
 # ---------------------------------------------------------------------------
 # ResourceView dispatch -- run_job on Artifact auto-promotes
@@ -661,6 +904,30 @@ class TestIstariPlatform:
         assert out is rev
         mock_client.get_revision.assert_called_once_with("rev-9")
 
+    def test_get_resource_at_revision_pins_parent_resource(self):
+        from istari_digital_client.v2.models import Model
+
+        rev = MagicMock()
+        rev.id = "rev-9"
+        rev.file_id = "file-1"
+        rev.file = MagicMock(resource_id="mod-1", resource_type="Model")
+
+        model = MagicMock(spec=Model)
+        model.id = "mod-1"
+        model.file = MagicMock()
+        model.file.id = "file-1"
+        model.file.revisions = [rev]
+
+        mock_client = MagicMock()
+        mock_client.get_revision.return_value = rev
+        mock_client.get_resource.return_value = model
+
+        view = IstariPlatform(mock_client).get_resource_at_revision("rev-9")
+        assert view.id == "mod-1"
+        assert view.revision_id == "rev-9"
+        mock_client.get_revision.assert_called_once_with("rev-9")
+        mock_client.get_resource.assert_called_once_with("Model", "mod-1")
+
     def test_put_text_file_add_and_update(self):
         mock_client = MagicMock()
         created = MagicMock()
@@ -695,10 +962,104 @@ class TestIstariPlatform:
         assert isinstance(q, ItemQuery)
         assert q._list_fn is mock_client.list_agents
 
-    @patch("istari_labs_helpers.istari_utils.IstariClient")
+    def test_whoami_returns_user_view(self):
+        mock_client = MagicMock()
+        user = MagicMock()
+        user.id = "user-abc"
+        user.email = "alice@example.com"
+        user.display_name = "Alice"
+        user.user_name = None
+        mock_client.get_current_user.return_value = user
+
+        me = IstariPlatform(mock_client).whoami()
+        assert me.id == "user-abc"
+        assert me.email == "alice@example.com"
+        assert str(me) == "Alice (alice@example.com)"
+        mock_client.get_current_user.assert_called_once()
+
+    def test_tools_query_yields_tool_views(self):
+        from istari_labs_helpers import ToolView
+
+        tool = MagicMock()
+        tool.id = "tool-1"
+        tool.name = "ansys"
+        tool.functions = [MagicMock(), MagicMock()]
+        page = MagicMock()
+        page.iter_items.return_value = iter([tool])
+        mock_client = MagicMock()
+        mock_client.list_tools.return_value = page
+
+        views = list(IstariPlatform(mock_client).tools())
+        assert len(views) == 1
+        assert isinstance(views[0], ToolView)
+        assert views[0].id == "tool-1"
+        assert views[0].name == "ansys"
+        assert views[0].function_count == 2
+
+    def test_find_user_by_email(self):
+        u1 = MagicMock()
+        u1.email = "bob@example.com"
+        u1.display_name = "Bob"
+        u1.id = "u1"
+        page = MagicMock()
+        page.iter_items.return_value = iter([u1])
+        mock_client = MagicMock()
+        mock_client.list_users.return_value = page
+
+        found = IstariPlatform(mock_client).find_user("Bob@Example.com")
+        assert found is not None
+        assert found.id == "u1"
+        assert IstariPlatform(mock_client).find_user("missing@example.com") is None
+
+    def test_user_tools_returns_execute_grants(self):
+        from istari_labs_helpers import ToolView, UserToolAccessQuery
+
+        perm = MagicMock()
+        perm.resource_id = "tool-a"
+        perm_page = MagicMock()
+        perm_page.iter_items.side_effect = lambda: iter([perm])
+
+        tool_a = MagicMock()
+        tool_a.id = "tool-a"
+        tool_a.name = "ansys"
+        tool_a.functions = [MagicMock()]
+        tool_b = MagicMock()
+        tool_b.id = "tool-b"
+        tool_b.name = "other"
+        tool_b.functions = []
+        tools_page = MagicMock()
+        tools_page.iter_items.side_effect = lambda: iter([tool_a, tool_b])
+
+        mock_client = MagicMock()
+        mock_client.list_resource_type_permissions.return_value = perm_page
+        mock_client.list_tools.return_value = tools_page
+
+        user = MagicMock()
+        user.id = "user-1"
+        user.email = "bob@example.com"
+        user.display_name = "Bob"
+        user.user_name = None
+        users_page = MagicMock()
+        users_page.iter_items.return_value = iter([user])
+        mock_client.list_users.return_value = users_page
+
+        platform = IstariPlatform(mock_client)
+        bob = platform.get_user("bob@example.com")
+        q = bob.tools()
+        assert isinstance(q, UserToolAccessQuery)
+        assert q.tool_ids == {"tool-a"}
+
+        views = list(q)
+        assert len(views) == 1
+        assert isinstance(views[0], ToolView)
+        assert views[0].name == "ansys"
+        assert len(bob.granted_tools()) == 1
+
+    @patch("istari_labs_helpers._sdk.V3Client")
+    @patch("istari_labs_helpers._sdk.Client")
     @patch("istari_digital_client.configuration.Configuration")
     @patch("dotenv.load_dotenv")
-    def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _ic, monkeypatch, tmp_path):
+    def test_from_env_uses_istari_ca_bundle(self, _ld, _cfg, _client, _v3, monkeypatch, tmp_path):
         bundle = tmp_path / "ca.pem"
         bundle.write_text("dummy")
         monkeypatch.setenv("ISTARI_CA_BUNDLE", str(bundle))
@@ -707,6 +1068,276 @@ class TestIstariPlatform:
         with patch("istari_labs_helpers.istari_utils.ssl.create_default_context"):
             IstariPlatform.from_env(".env")
         assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle.resolve())
+        _client.assert_called_once()
+        _v3.assert_called_once()
+
+
+class TestBranchDownload:
+    def _make_system(self, mock_client):
+        system = MagicMock()
+        system.id = "sys-1"
+        system.name = "Demo System"
+        system.configurations = []
+        system.client = mock_client
+        return system
+
+    def test_branches_lists_baseline_and_user_branches(self):
+        from istari_labs_helpers import BranchView
+
+        baseline = MagicMock()
+        baseline.tag = "baseline"
+        baseline.is_baseline = True
+        baseline.snapshot_id = "snap-b"
+        baseline.id = "tag-b"
+
+        main = MagicMock()
+        main.tag = "main"
+        main.is_baseline = False
+        main.snapshot_id = "snap-m"
+        main.id = "tag-m"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(side_effect=lambda name: baseline if name == "baseline" else main)
+        system.list_branches = MagicMock(return_value=[main])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        views = SystemView(_system=system, _client=mock_client).branches()
+        assert len(views) == 2
+        assert all(isinstance(v, BranchView) for v in views)
+        assert views[0].name == "baseline"
+        assert views[1].name == "main"
+
+    def test_download_single_revision_writes_file(self, tmp_path):
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-1", id="tag-1")
+        item = MagicMock()
+        item.name = "wing.mdzip"
+        item.display_name = "Wing"
+        item.extension = None
+        item.revision_id = "rev-1"
+        item.read_bytes.return_value = b"MODEL"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path
+        )
+
+        assert isinstance(result, BranchDownloadResult)
+        assert result.file_count == 1
+        assert result.is_zip is False
+        assert result.members == ("wing.mdzip",)
+        assert result.path.read_bytes() == b"MODEL"
+
+    def test_download_multiple_revisions_writes_zip(self, tmp_path):
+        import zipfile
+
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-2", id="tag-2")
+
+        def make_item(name, content):
+            item = MagicMock()
+            item.name = name
+            item.display_name = name
+            item.extension = None
+            item.revision_id = f"rev-{name}"
+            item.read_bytes.return_value = content
+            return item
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(
+            return_value=[make_item("a.json", b"A"), make_item("b.json", b"B")]
+        )
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "main", dest=tmp_path / "bundle.zip"
+        )
+
+        assert result.is_zip is True
+        assert result.file_count == 2
+        with zipfile.ZipFile(result.path) as zf:
+            assert sorted(zf.namelist()) == ["a.json", "b.json"]
+
+    def test_download_system_resources_by_id(self, tmp_path):
+        from istari_labs_helpers import IstariPlatform
+
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-3", id="tag-3")
+        item = MagicMock()
+        item.name = "only.catpart"
+        item.display_name = "Only"
+        item.extension = None
+        item.revision_id = "rev-1"
+        item.read_bytes.return_value = b"X"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[])
+        mock_client.get_system.return_value = system
+
+        result = IstariPlatform(mock_client).download_system_resources(
+            "sys-1", "main", dest=tmp_path
+        )
+        assert result.file_count == 1
+        assert result.path.name == "only.catpart"
+
+    def test_branch_subsystems(self):
+        from istari_labs_helpers import SubsystemView
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-1", id="tag-1")
+        sub_item = MagicMock()
+        sub_item.system_id = "sub-1"
+        sub_item.system_name = "Wing"
+        sub_item.system_description = "Wing assembly"
+        sub_item.tag_id = "tag-sub"
+        sub_item.tagged_configuration_id = "cfg-sub"
+        sub_item.tagged_configuration_name = "v1"
+        sub_item.tagged_snapshot_id = "snap-sub"
+        sub_item.is_archived = False
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system.list_branch_subsystems = MagicMock(return_value=[sub_item])
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        views = SystemView(_system=system, _client=mock_client).get_branch("baseline").subsystems()
+        assert len(views) == 1
+        assert isinstance(views[0], SubsystemView)
+        assert views[0].system_name == "Wing"
+        assert views[0].snapshot_id == "snap-sub"
+        system.list_branch_subsystems.assert_called_once_with(branch_tag)
+
+    def test_branch_configuration_and_advance_to(self):
+        from istari_labs_helpers.istari_utils import BranchView, ConfigurationView
+
+        mock_client = MagicMock()
+        branch_tag = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-old", id="tag-main")
+        branch_tag_after = MagicMock(tag="main", is_baseline=False, snapshot_id="snap-new", id="tag-main")
+        cfg = MagicMock()
+        cfg.id = "cfg-1"
+        cfg.name = "v2"
+        cfg.system_id = "sys-1"
+        snap = MagicMock(configuration_id="cfg-1")
+        snap.id = "snap-old"
+        new_snap = MagicMock()
+        new_snap.id = "snap-new"
+
+        system = self._make_system(mock_client)
+        system.configurations = [cfg]
+        system.get_branch = MagicMock(return_value=branch_tag_after)
+
+        mock_client.get_snapshot.return_value = snap
+        mock_client.get_system.return_value = system
+        mock_client.create_snapshot.return_value = new_snap
+
+        branch = BranchView(_tag=branch_tag, _system=system, _client=mock_client)
+        config_view = branch.configuration
+        assert isinstance(config_view, ConfigurationView)
+        assert config_view.id == "cfg-1"
+
+        new_cfg = ConfigurationView(_config=cfg, _client=mock_client)
+        out = branch.advance_to(new_cfg)
+        assert out is branch
+        assert branch.snapshot_id == "snap-new"
+        mock_client.create_snapshot.assert_called_once()
+        mock_client.update_tag.assert_called_once()
+        assert mock_client.update_tag.call_args.args[0] == "tag-main"
+
+    def test_download_with_subsystem_depth(self, tmp_path):
+        import zipfile
+
+        from istari_labs_helpers import BranchDownloadResult
+
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-root", id="tag-1")
+
+        root_item = MagicMock()
+        root_item.name = "root.json"
+        root_item.display_name = "root"
+        root_item.extension = None
+        root_item.revision_id = "rev-root"
+        root_item.read_bytes.return_value = b"ROOT"
+
+        sub_item = MagicMock()
+        sub_item.system_id = "sub-1"
+        sub_item.system_name = "Wing"
+        sub_item.tagged_snapshot_id = "snap-sub"
+
+        sub_file = MagicMock()
+        sub_file.name = "wing.json"
+        sub_file.display_name = "wing"
+        sub_file.extension = None
+        sub_file.revision_id = "rev-sub"
+        sub_file.read_bytes.return_value = b"WING"
+
+        sub_system = MagicMock()
+        sub_system.id = "sub-1"
+        sub_system.name = "Wing"
+        sub_system.configurations = []
+        sub_system.client = None
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[root_item])
+        system._iter_snapshot_subsystems = MagicMock(return_value=[sub_item])
+        sub_system._iter_snapshot_revisions = MagicMock(return_value=[sub_file])
+        sub_system._iter_snapshot_subsystems = MagicMock(return_value=[])
+        mock_client.get_system.return_value = sub_system
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        result = SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path, depth=2
+        )
+
+        assert isinstance(result, BranchDownloadResult)
+        assert result.is_zip is True
+        assert result.file_count == 2
+        with zipfile.ZipFile(result.path) as zf:
+            assert sorted(zf.namelist()) == ["Wing/wing.json", "root.json"]
+            assert zf.read("root.json") == b"ROOT"
+            assert zf.read("Wing/wing.json") == b"WING"
+
+    def test_download_depth_one_skips_subsystems(self, tmp_path):
+        branch_tag = MagicMock(tag="baseline", is_baseline=True, snapshot_id="snap-root", id="tag-1")
+
+        root_item = MagicMock()
+        root_item.name = "only.json"
+        root_item.display_name = "only"
+        root_item.extension = None
+        root_item.revision_id = "rev-root"
+        root_item.read_bytes.return_value = b"ONLY"
+
+        mock_client = MagicMock()
+        system = self._make_system(mock_client)
+        system.get_branch = MagicMock(return_value=branch_tag)
+        system._iter_snapshot_revisions = MagicMock(return_value=[root_item])
+        system._iter_snapshot_subsystems = MagicMock()
+
+        from istari_labs_helpers.istari_utils import SystemView
+
+        SystemView(_system=system, _client=mock_client).download_resources(
+            "baseline", dest=tmp_path, depth=1
+        )
+        system._iter_snapshot_subsystems.assert_not_called()
 
 
 class TestItemQuery:

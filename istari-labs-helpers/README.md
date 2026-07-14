@@ -43,12 +43,29 @@ ISTARI_PERSONAL_ACCESS_TOKEN=your_personal_access_token
 
 ```
 IstariPlatform                (entry point)
+  +-- .whoami()                      -> UserView
+  +-- .find_user() / .get_user()     -> UserView
+  +-- .client / .v3                  -> v2 Client / v3 V3Client (SDK escape hatches)
   +-- .resources()                   -> ResourceQuery  (lazy; .type("model") etc.)
-  +-- .systems() / .jobs() / .agents() / .files() / .artifacts() / .snapshots() / ...
-  |                                  -> ItemQuery      (lazy, chainable, immutable)
+  +-- .systems() / .jobs() / .tools() / .agents() / .files() / .artifacts() / ...
+  |                                  -> ItemQuery or ToolQuery (lazy, chainable)
+  +-- UserView                (wraps User)
+  |     +-- .id / .email / .display_name
+  |     +-- .tools()                 -> UserToolAccessQuery (execute grants for this user)
+  |     +-- .granted_tools()         -> list[ToolView]
+  +-- ToolView                (wraps Tool)
+  |     +-- .id / .name / .functions / .function_count
   +-- SystemView              (wraps System)
   |     +-- .baseline                -> SnapshotView
   |     +-- .configurations          -> list[ConfigurationView]
+  |     +-- .branches() / .get_branch()  -> BranchView (snapshot tags)
+  |     +-- .download_resources()    -> BranchDownloadResult
+  +-- BranchView              (wraps SnapshotTag — a branch)
+  |     +-- .list_revisions()        -> list[SnapshotRevisionSearchItem]
+  |     +-- .configuration           -> ConfigurationView
+  |     +-- .advance_to(cfg)         -> self
+  |     +-- .download_resources()    -> BranchDownloadResult
+  |     +-- .subsystems()            -> list[SubsystemView]
   +-- SnapshotView            (wraps Snapshot)
   |     +-- .configuration           -> ConfigurationView
   +-- ConfigurationView       (wraps SystemConfiguration)
@@ -62,7 +79,7 @@ IstariPlatform                (entry point)
   |     +-- .save(name=None)         -> ConfigurationView
   +-- ResourceView            (unified wrapper over any Resource: Artifact, Model, ...)
   |     +-- .name / .filename / .mime / .file_id / .revision_id
-  |     +-- .revision / .latest_revision / .pin(rev) / .unpinned
+  |     +-- .revision / .latest_revision / .is_latest / .pin(rev) / .unpinned
   |     +-- .read_bytes() / .read_text() / .download(dest)
   |     +-- .as_source()             -> NewSource (chain into next job)
   |     +-- .promote()               -> ModelView (tag: "promoted_from")
@@ -91,6 +108,27 @@ from istari_labs_helpers import IstariPlatform, JobDefinition
 platform = IstariPlatform.from_env()  # reads .env
 ```
 
+### Who am I? List a user's tools
+
+```python
+me = platform.whoami()
+print(me.id)                    # user uuid
+print(me)                       # "Alice (alice@example.com)"
+
+for tool in me.tools():         # tools you may execute
+    print(tool.name, tool.function_count)
+
+# Org-admin: another user's execute grants (Manage Tool Access)
+user = platform.get_user("bob@example.com")
+print(user.id)
+for tool in user.tools():
+    print(tool.id, tool.name)
+print(f"{len(user.tools())} tool(s) with execute access")
+```
+
+To browse the **full tool catalog** visible to your admin token (not scoped to
+one user), use ``platform.tools()`` instead.
+
 ### Browse a system's baseline models and their jobs
 
 ```python
@@ -118,17 +156,18 @@ new_cfg = cfg.add_file(
 ).save()
 ```
 
-### Add multiple files and set as baseline
+### Add a file on a branch and advance the branch HEAD
 
 ```python
-new_cfg = (
-    cfg
-    .add_file(path="resources/file_a.mdzip", display_name="File A")
-    .add_file(path="resources/file_b.mdzip", display_name="File B")
-    .save("v5")
-    .set_baseline()
-)
+branch = system.get_branch("baseline")  # or any snapshot tag name
+new_cfg = branch.configuration.add_file(
+    path="report.html",
+    display_name="report.html",
+).save()
+branch.advance_to(new_cfg)  # snapshot + move this branch tag
 ```
+
+For the baseline tag only, `save().set_baseline()` is equivalent.
 
 ### Find a model with the lazy resource query
 
@@ -199,6 +238,13 @@ item  = platform.resources().type("model").filter(display_name="MQ-99 SFR").firs
 model = platform.get_model(item.id)
 job = model.run_job(JobDefinition(function="@istari:extract", tool_name="cameo"))
 
+# Or find a named extract product without listing jobs
+art = model.find_artifact(filename="text.txt")
+
+# SDK resource type: Artifact vs Model
+if art and art.is_artifact:
+    parents = art.job.get_sources() if art.job else []
+
 # Artifact -- auto-promoted under the hood
 artifact = job.find_product(filename="extraction_output.json")   # pinned ResourceView
 next_job = artifact.run_job(JobDefinition(function="@sysml:transform", tool_name="..."))
@@ -243,6 +289,30 @@ model.get_lineage().print_tree()
 system = platform.get_system("Berserker")
 for cfg in system.configurations:
     print(cfg.name, cfg.id)
+```
+
+### List branches on a system
+
+```python
+system = platform.get_system("Berserker")
+for branch in system.branches():
+    print(branch.name, len(branch.list_revisions()))
+```
+
+### Download all resources on a branch
+
+```python
+# Single file when one revision at branch HEAD; .zip when several
+result = platform.download_system_resources(
+    system.id,
+    "baseline",
+    dest="./exports",
+)
+print(result.path, result.is_zip, result.members)
+
+# Or via SystemView
+result = system.download_resources("baseline", dest="./exports")
+result = system.get_branch("baseline").download_resources("./exports")
 ```
 
 ### Find a model in a configuration

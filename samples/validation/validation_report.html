@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>Validation report</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d0d7de;padding:.5rem;text-align:left}
+tr.pass{background:#dafbe1} tr.fail{background:#ffebe9}
+.status{width:2rem;text-align:center;font-weight:bold}
+.pass{color:#1a7f37} .fail{color:#cf222e}
+</style></head><body>
+<h1>Validation report</h1><p class='fail'>1 failed.</p>
+<table><thead><tr><th></th><th>Requirement</th><th>Bounds</th><th>Parameter value</th></tr></thead>
+<tbody><tr class="pass"><td class="status">✓</td><td>2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::LEFT STABILIZER::Stabilizer_Length</td><td><code>[[324.0;396.0]]</code></td><td><code>360mm</code></td></tr>
+<tr class="pass"><td class="status">✓</td><td>2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::LEFT STABILIZER::Stabilizer_Height</td><td><code>[[360.0;440.0]]</code></td><td><code>400mm</code></td></tr>
+<tr class="pass"><td class="status">✓</td><td>2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING::DIHEDRAL_ANGLE</td><td><code>[[1.03;1.26]]</code></td><td><code>1.146deg</code></td></tr>
+<tr class="fail"><td class="status">✗</td><td>2.1 Wings Subsystem 1 Solution Domain::1 Subsystem Requirements::WING::WING_LENGTH</td><td><code>[[2250.0;2750.0]]</code></td><td><code>1800mm</code></td></tr>
+<tr class="pass"><td class="status">✓</td><td>2.2 Fuselage Subsystem 2 Solution Domain::FUSELAGE::FUSELAGE_LENGTH</td><td><code>[[2452.5;2997.5]]</code></td><td><code>2725mm</code></td></tr>
+<tr class="pass"><td class="status">✓</td><td>2.2 Fuselage Subsystem 2 Solution Domain::FUSELAGE::FUSELAGE_RADIUS</td><td><code>[[90.0;110.0]]</code></td><td><code>100mm</code></td></tr></tbody></table></body></html>
