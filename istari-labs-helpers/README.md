@@ -238,6 +238,13 @@ item  = platform.resources().type("model").filter(display_name="MQ-99 SFR").firs
 model = platform.get_model(item.id)
 job = model.run_job(JobDefinition(function="@istari:extract", tool_name="cameo"))
 
+# Or find a named extract product without listing jobs
+art = model.find_artifact(filename="text.txt")
+
+# SDK resource type: Artifact vs Model
+if art and art.is_artifact:
+    parents = art.job.get_sources() if art.job else []
+
 # Artifact -- auto-promoted under the hood
 artifact = job.find_product(filename="extraction_output.json")   # pinned ResourceView
 next_job = artifact.run_job(JobDefinition(function="@sysml:transform", tool_name="..."))

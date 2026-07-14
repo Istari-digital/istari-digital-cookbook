@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ResourceView.is_model` / `is_artifact`**, **`as_model()` / `as_artifact()`** — classify by SDK resource type (`Model` / `Artifact`).
+- **`ResourceView.job`** — producing `JobView` for a revision with a Job parent, or `None`.
+- **`ModelView.find_artifact(filename=…)`** — named product from `model.artifacts` (no `list_model_jobs`).
+- **`JobView.tool_name`**, **`get_sources()`**, **`get_artifacts()`** — tool metadata, input resources, and Artifact products.
+- **`ModelView.latest_completed_job(tool_name, function_name)`** — most recent completed job for a tool/function pair **on this view's effective revision** (`model_revision_id` match). Prefer `find_artifact` when you only need a product.
+- **`BranchView.find_model(...)`** — resolve a model on the branch HEAD configuration.
 - **`BranchView.add_resource` / `BranchView.add_file`** — convenience wrappers that start from the branch HEAD configuration.
 - **`ConfigurationView.add_resource` / `TrackedFileSet.add_resource`** — track an already-uploaded `ResourceView` / `ModelView` by file id.
 - **`BranchView.configuration`** — configuration behind the branch HEAD snapshot.

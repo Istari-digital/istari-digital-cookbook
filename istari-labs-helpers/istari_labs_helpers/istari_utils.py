@@ -30,24 +30,11 @@ Entity hierarchy
       +-- TrackedFileSet        (builder for new configurations)
       |     +-- .add_file(fid)         -> self  (chainable)
       |     +-- .save(name=None)       -> ConfigurationView
-      +-- ModelView           (wraps Model + optional TrackedFile; extends ResourceView)
-      |     +-- .name / .id
-      |     +-- .current_revision_id / .pinned_revision_id
-      |     +-- .get_jobs() / .get_configurations()
-      |     +-- .download_artifacts() / .archive()
-      |     +-- .submit_job()          -> JobView
-      |     +-- .run_job()             -> JobView
-      +-- JobView             (wraps Job)
-      |     +-- .status / .created / .function_name
-      |     +-- .model_revision_id
-      |     +-- .revision              -> FileRevision (latest job-output revision)
-      |     +-- .get_products()        -> list[ResourceView]  (each pinned to the product's revision)
-      |     +-- .find_product()        -> ResourceView | None  (pinned)
-      |     +-- .wait()                -> self (chainable)
-      |     +-- .on_success()          -> self or raise
-      |     +-- .completed / .failed   bool properties
       +-- ResourceView        (unified wrapper for Artifact / Model / …)
       |     +-- .id / .type / .raw / .file / .latest_revision / .is_latest
+      |     +-- .is_model / .is_artifact / .as_model() / .as_artifact()
+      |     |     (SDK resource type: ``type == "Model"`` / ``"Artifact"``)
+      |     +-- .job                   -> JobView | None  (producing job, when Job parent)
       |     +-- .revision              -> FileRevision  (pinned if set, else latest)
       |     +-- .pin(rev) / .unpinned  (toggle the revision pin)
       |     +-- .name / .filename / .mime / .file_id / .revision_id
@@ -57,6 +44,26 @@ Entity hierarchy
       |     +-- .get_lineage()         -> LineageNode  (backward provenance)
       |     +-- .submit_job(defn)      -> JobView  (auto-promotes Artifact resources)
       |     +-- .run_job(defn)         -> JobView  (submit + wait + on_success)
+      +-- ModelView           (wraps Model + optional TrackedFile; extends ResourceView)
+      |     +-- .name / .id
+      |     +-- .current_revision_id / .pinned_revision_id
+      |     +-- .find_artifact(filename=…)  -> ResourceView | None  (from model.artifacts; no jobs API)
+      |     +-- .get_jobs() / .latest_completed_job(tool, function)
+      |     |     (latest_completed_job is scoped to this view's effective revision)
+      |     +-- .get_configurations()
+      |     +-- .download_artifacts() / .archive()
+      |     +-- .submit_job()          -> JobView
+      |     +-- .run_job()             -> JobView
+      +-- JobView             (wraps Job)
+      |     +-- .status / .created / .function_name / .tool_name
+      |     +-- .model_revision_id
+      |     +-- .revision              -> FileRevision (latest job-output revision)
+      |     +-- .get_sources()         -> list[ResourceView]  (job inputs, e.g. Model)
+      |     +-- .get_products() / .get_artifacts()  -> list[ResourceView]
+      |     +-- .find_product()        -> ResourceView | None  (pinned)
+      |     +-- .wait()                -> self (chainable)
+      |     +-- .on_success()          -> self or raise
+      |     +-- .completed / .failed   bool properties
       +-- LineageNode         (one revision in a backward lineage tree)
             +-- .step          'upload' | 'job_run' | 'promotion' | 'derived'
             +-- .parents       list[LineageNode]  (recursive)
@@ -871,6 +878,72 @@ class ResourceView:
             return res._resource_type
         return type(res).__name__
 
+    def _producing_job_id(self) -> str | None:
+        """Job resource id among this revision's sources, if any (no API call)."""
+        rev = self.revision
+        if rev is None:
+            return None
+        for src in rev.sources or []:
+            if getattr(src, "resource_type", None) == "Job" and getattr(src, "resource_id", None):
+                return src.resource_id
+        return None
+
+    @property
+    def is_artifact(self) -> bool:
+        """True when the SDK resource type is ``Artifact``."""
+        return self.type == "Artifact"
+
+    @property
+    def is_model(self) -> bool:
+        """True when the SDK resource type is ``Model``."""
+        return self.type == "Model"
+
+    def as_model(self) -> ModelView | None:
+        """Return a ``ModelView`` when :attr:`is_model`; otherwise ``None``.
+
+            m = resource.as_model()
+            if m is not None:
+                art = m.find_artifact(filename="text.txt")
+        """
+        if not self.is_model:
+            return None
+        if isinstance(self, ModelView):
+            return self
+        return ModelView(
+            _resource=self._resource,
+            _client=self._client,
+            _pinned_revision=self._pinned_revision,
+            _revision_loader=self._revision_loader,
+        )
+
+    def as_artifact(self) -> ResourceView | None:
+        """Return ``self`` when :attr:`is_artifact`; otherwise ``None``.
+
+            art = resource.as_artifact()
+            if art is not None:
+                job = art.job
+                parents = job.get_sources() if job else []
+        """
+        return self if self.is_artifact else None
+
+    @property
+    def job(self) -> JobView | None:
+        """Job that produced this view's effective revision, if any.
+
+        Looks up the ``Job`` parent from ``revision.sources``.  Typical for
+        Artifacts.  Returns ``None`` when there is no Job parent.
+        """
+        job_id = self._producing_job_id()
+        if not job_id:
+            return None
+        try:
+            return JobView(
+                _job=self._client.get_job(job_id),
+                _client=self._client,
+            )
+        except Exception:
+            return None
+
     @property
     def raw(self) -> Any:
         return self._resource
@@ -1248,6 +1321,12 @@ class JobView:
         return self._job.function.name if self._job.function else "?"
 
     @property
+    def tool_name(self) -> str | None:
+        """Tool that ran this job (from ``function.tool_name``), or ``None``."""
+        fn = self._job.function
+        return getattr(fn, "tool_name", None) if fn else None
+
+    @property
     def status(self) -> str:
         latest = self._job.status_history[-1] if self._job.status_history else None
         return latest.name.value if latest else "unknown"
@@ -1273,6 +1352,38 @@ class JobView:
                     if src.resource_type == "Model":
                         return src.revision_id
         return None
+
+    def get_sources(self) -> list[ResourceView]:
+        """Return non-Job source resources that fed this job (typically Models).
+
+        Reads ``job.revision.sources`` and skips ``resource_type == "Job"``
+        (the parameters blob).  Each view is pinned to the source revision
+        when a revision id is present.
+        """
+        rev = self.revision
+        if rev is None:
+            return []
+        views: list[ResourceView] = []
+        for src in rev.sources or []:
+            rtype = getattr(src, "resource_type", None)
+            rid = getattr(src, "resource_id", None)
+            if not rtype or not rid or rtype == "Job":
+                continue
+            try:
+                resource = self._client.get_resource(rtype, rid)
+            except Exception:
+                continue
+            if resource is None:
+                continue
+            pinned = None
+            rev_id = getattr(src, "revision_id", None)
+            if rev_id:
+                try:
+                    pinned = self._client.get_revision(rev_id)
+                except Exception:
+                    pinned = None
+            views.append(_make_resource_view(resource, self._client, pinned_revision=pinned))
+        return views
 
     # -- actions ------------------------------------------------------------
 
@@ -1487,6 +1598,10 @@ class JobView:
                 return view
         return None
 
+    def get_artifacts(self) -> list[ResourceView]:
+        """Return Artifact products from this job (pinned ``ResourceView``s)."""
+        return self.get_products(resource_type="Artifact")
+
     def attach_file(
         self,
         file_path: str | Path,
@@ -1590,6 +1705,97 @@ class ModelView(ResourceView):
     def get_jobs(self, size: int = 100) -> list[JobView]:
         page = self._client.list_model_jobs(self.id, size=size)
         return [JobView(_job=j, _client=self._client) for j in page.iter_items()]
+
+    def find_artifact(
+        self,
+        *,
+        name: str | None = None,
+        filename: str | None = None,
+    ) -> ResourceView | None:
+        """Find an attached artifact by display name or filename.
+
+        Reads ``model.artifacts`` from the already-loaded Model (no
+        ``list_model_jobs`` round-trip).  Prefers an artifact whose Model
+        source revision matches this view's effective ``revision_id``.
+
+            art = model.find_artifact(filename="text.txt")
+            job = art.job if art else None
+        """
+        if not name and not filename:
+            raise ValueError("Provide name or filename")
+
+        artifacts = getattr(self._resource, "artifacts", None) or []
+        want_rev = self.revision_id
+        preferred: ResourceView | None = None
+        fallback: ResourceView | None = None
+
+        for raw_art in artifacts:
+            view = _make_resource_view(raw_art, self._client)
+            art_name = getattr(raw_art, "name", None) or view.name
+            art_filename = view.filename
+            if name and art_name != name and view.name != name:
+                continue
+            if filename and art_filename != filename and art_name != filename:
+                continue
+
+            # Prefer artifact produced from this model revision.
+            src_model_rev = None
+            rev = view.revision
+            if rev is not None:
+                for src in rev.sources or []:
+                    if (
+                        getattr(src, "resource_type", None) == "Model"
+                        and getattr(src, "resource_id", None) == self.id
+                    ):
+                        src_model_rev = getattr(src, "revision_id", None)
+                        break
+
+            if want_rev and src_model_rev == want_rev:
+                preferred = view
+                break
+            if fallback is None:
+                fallback = view
+
+        return preferred or fallback
+
+    def latest_completed_job(
+        self,
+        tool_name: str,
+        function_name: str,
+        *,
+        size: int = 100,
+    ) -> JobView | None:
+        """Most recent completed job for *tool_name* + *function_name* on **this revision**.
+
+        Only jobs whose ``model_revision_id`` equals this view's effective
+        ``revision_id`` are considered (pinned or latest).  Returns ``None``
+        when the view has no revision or no matching job.
+
+        Note: uses ``list_model_jobs``, which can be slow or fail on some
+        registries.  Prefer :meth:`find_artifact` when you only need a named
+        product.
+
+            job = model.pin(rev).latest_completed_job("open_pdf", "@istari:extract")
+        """
+        rev_id = self.revision_id
+        if rev_id is None:
+            return None
+
+        matches = [
+            j for j in self.get_jobs(size=size)
+            if j.completed
+            and j.function_name == function_name
+            and (j.tool_name or "") == tool_name
+            and j.model_revision_id == rev_id
+        ]
+        if not matches:
+            return None
+
+        def _created_at(j: JobView) -> datetime:
+            created = getattr(j.raw, "created", None)
+            return created if isinstance(created, datetime) else datetime.min
+
+        return max(matches, key=_created_at)
 
     def get_configurations(self) -> list[tuple[System, SystemConfiguration]]:
         """Find every (system, configuration) that tracks this model."""
@@ -2154,6 +2360,23 @@ class BranchView:
             display_name=display_name,
             external_identifier=external_identifier,
             version_name=version_name,
+        )
+
+    def find_model(
+        self,
+        *,
+        name: str | None = None,
+        filename: str | None = None,
+        external_id: str | None = None,
+    ) -> ModelView | None:
+        """Find a tracked model on this branch HEAD (by name, filename, or external id).
+
+            model = branch.find_model(filename="Warthrop_ICD_Rev3.pdf")
+        """
+        return self.configuration.find_model(
+            name=name,
+            filename=filename,
+            external_id=external_id,
         )
 
     def list_revisions(self) -> list[Any]:
