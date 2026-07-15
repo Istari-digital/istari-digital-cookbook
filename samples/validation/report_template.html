@@ -5,16 +5,18 @@
 <p style="color:#666;font-size:12px">Generated: $timestamp &nbsp;|&nbsp; Model: $provider/$model</p>
 <div style="background:#f5f5f5;border:1px solid #ccc;padding:10px;font-size:11px;font-family:monospace;margin:12px 0">
   <b>SOURCE OF TRUTH TRACE</b><br>
-  [file1] Revision: <a href="$href1"><b>$rev1</b></a> &nbsp;&nbsp; $filename1 &nbsp;&nbsp; resource: $uuid1<br>
-  [file2] Revision: <a href="$href2"><b>$rev2</b></a> &nbsp;&nbsp; $filename2 &nbsp;&nbsp; resource: $uuid2
+  [A] artifact <a href="$href_art_a"><b>$artifact_a</b></a> rev $rev_art_a
+      ← model <a href="$href_model_a"><b>$model_a</b></a> rev $rev_model_a<br>
+  [B] artifact <a href="$href_art_b"><b>$artifact_b</b></a> rev $rev_art_b
+      ← model <a href="$href_model_b"><b>$model_b</b></a> rev $rev_model_b
 </div>
 <h3 style="color:#2E7D32">MATCHES</h3><ul>$matches_html</ul>
 <h3 style="color:#E65100">CONFLICTS</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">
   <tr style="background:#E65100;color:white">
     <th style="padding:8px;text-align:left">Item</th>
-    <th style="padding:8px;text-align:left"><a href="$href1" style="color:white">$rev1</a></th>
-    <th style="padding:8px;text-align:left"><a href="$href2" style="color:white">$rev2</a></th>
+    <th style="padding:8px;text-align:left"><a href="$href_art_a" style="color:white">$artifact_a</a></th>
+    <th style="padding:8px;text-align:left"><a href="$href_art_b" style="color:white">$artifact_b</a></th>
   </tr>
   $conflicts_html
 </table>
