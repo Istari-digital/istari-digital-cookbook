@@ -34,8 +34,9 @@ dev = [
     "nbclient>=0.10.2",
     "nbformat>=5.10.4",
 ]
-# Workflow-logs walkthrough: tables, plots, pytest tradespace sweep.
+# Workflow-logs walkthrough: tables, plots, pytest tradespace sweep, CAD STEP solids.
 advanced = [
+    "cadquery>=2.7.0",
     "ipython>=8.0",
     "jinja2>=3.1",
     "matplotlib>=3.8",
