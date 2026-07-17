@@ -40,7 +40,9 @@ import argparse
 import os
 import sys
 import time
+from istari_digital_client.v2.models.os import OS
 from pathlib import Path
+
 
 from istari_digital_client import Client, Configuration, FunctionAuthType, NewSource
 
@@ -202,8 +204,8 @@ def submit_extract_job(client: Client, model_id: str, sources: list,
         model_id=model_id,
         function=function,
         tool_name="dassault_cameo",
-        tool_version=tool_version or None,
-        operating_system=operating_system or None,
+        tool_version=tool_version or "2024x Refresh2",
+        operating_system=OS.WINDOWS_11,
         parameters=parameters if parameters else None,
         sources=sources if sources else None,
         assigned_agent_id=assigned_agent_id or None,
