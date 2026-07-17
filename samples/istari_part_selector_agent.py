@@ -207,6 +207,15 @@ class SelectedPart(BaseModel):
         Field(description="OrCAD CIS part type")
 
     # OrCAD part metadata
+    part_name:     str = Field(
+        description=(
+            "Short base name used as the filename and OrCAD symbol name — "
+            "the model/family identifier without grade/package suffix. "
+            "Example: MPN 'MIC28516T-E/PHA' → part_name 'MIC28516T'. "
+            "Strip trailing grade codes like -E, /PHA, -T, -TR, -ND, etc. "
+            "Use only alphanumeric characters and hyphens."
+        )
+    )
     num_sections:  str = Field(
         default="1",
         description="Number of schematic sections/gates (as string). '1' for most parts; '2' for dual op-amps, etc."
@@ -665,7 +674,6 @@ def parts_to_olb_json(parts: list[SelectedPart], library_name: str = "selected_p
     """
     olb_parts = []
     for part in parts:
-        safe_mpn = part.mpn.replace("/", "-").replace("\\", "-").replace(" ", "_")
         pins = [
             {
                 "number":   p.number,
@@ -686,7 +694,7 @@ def parts_to_olb_json(parts: list[SelectedPart], library_name: str = "selected_p
                  "shape": "Line", "group": "G1", "position": "Right"},
             ]
         olb_parts.append({
-            "name":        safe_mpn,
+            "name":        part.part_name,
             "description": part.description,
             "reference":   part.reference_designator,
             "value":       part.value or part.mpn,
@@ -700,6 +708,50 @@ def parts_to_olb_json(parts: list[SelectedPart], library_name: str = "selected_p
         }
     }
     return json.dumps(library, indent=2)
+
+
+def part_to_single_json(part: SelectedPart) -> str:
+    """
+    Serialize one SelectedPart to the single-part JSON format used by Cadence OrCAD.
+    Matches the MIC28516T.json example exactly:
+      { "name", "num_sections", "prefix", "section_style", "mfg_pn", "partNumber",
+        "manufacturer", "value", "description", "package_type", "pcb_footprint", "pins" }
+    Output file is named {part.part_name}.json.
+    """
+    pins = []
+    for p in (part.pins or []):
+        pins.append({
+            "number":   p.number,
+            "name":     p.name,
+            "type":     p.type.upper(),
+            "visible":  p.visible,
+            "shape":    p.shape.upper(),
+            "group":    p.group,
+            "position": p.position.upper(),
+        })
+    if not pins:
+        pins = [
+            {"number": "1", "name": "1", "type": "PASSIVE",
+             "visible": True, "shape": "LINE", "group": "1", "position": "LEFT"},
+            {"number": "2", "name": "2", "type": "PASSIVE",
+             "visible": True, "shape": "LINE", "group": "1", "position": "RIGHT"},
+        ]
+
+    obj = {
+        "name":          part.part_name,
+        "num_sections":  part.num_sections,
+        "prefix":        part.reference_designator,
+        "section_style": part.section_style,
+        "mfg_pn":        part.mpn,
+        "partNumber":    part.mpn,
+        "manufacturer":  part.manufacturer,
+        "value":         part.value or part.part_name,
+        "description":   part.description,
+        "package_type":  part.package_type or (part.package or "").split("-")[0] or "",
+        "pcb_footprint": part.footprint or part.package or "",
+        "pins":          pins,
+    }
+    return json.dumps(obj, indent=2)
 
 
 def parts_to_parts_json(parts: list[SelectedPart]) -> str:
@@ -732,7 +784,7 @@ def parts_to_parts_json(parts: list[SelectedPart]) -> str:
             ]
 
         out.append({
-            "name":          safe_mpn,
+            "name":          part.part_name,
             "num_sections":  part.num_sections,
             "prefix":        part.reference_designator,
             "section_style": part.section_style,
@@ -755,6 +807,21 @@ def parts_to_parts_json(parts: list[SelectedPart]) -> str:
 SELECTION_SYSTEM = """\
 You are a senior hardware procurement and design engineer specialising in
 component selection for embedded systems and electronic assemblies.
+
+CRITICAL DATA PROVENANCE RULE
+------------------------------
+You MUST only reason from the requirements text and Silicon Expert datasheet data
+supplied in this prompt. Do NOT introduce knowledge from training data, general
+engineering judgment, or any source not present in the input.
+- Every selected part must come from the datasheet data provided — do not invent
+  or suggest parts not listed in the "AVAILABLE PARTS" section.
+- Every attribute you populate (value, tolerance, voltage rating, pin names, etc.)
+  must be traceable to a field in the provided datasheet JSON.
+- If a requirement cannot be matched to any part in the provided datasheets, add
+  its ID to unmatched_req_ids. Do not guess or substitute a similar part.
+- selection_rationale must cite specific parametric values from the datasheet
+  that satisfy specific requirement text — not general engineering reasoning.
+- Do not add, modify, or interpolate requirement IDs.
 
 Given:
   1. A list of engineering requirements (from a Cameo/SysML model)
@@ -878,6 +945,16 @@ def run_pipeline(
 
     # ── Step 2: Fetch SE datasheets ───────────────────────────────────────────
     print(f"\n[2/4] Loading Silicon Expert datasheets from Istari ...")
+
+    # Collect the resource IDs actually fetched (for UUID provenance)
+    datasheet_resource_ids_used: list[tuple[str, str]] = []  # [(resource_id, label)]
+    if datasheets_model_id:
+        found = istari.find_datasheet_resource_ids(datasheets_model_id)
+        datasheet_resource_ids_used.extend(found)
+    for rid in (datasheets_resource_ids or []):
+        label = istari.get_resource_name(rid) or rid
+        datasheet_resource_ids_used.append((rid, label))
+
     datasheets = load_datasheets_from_istari(
         istari,
         model_id=datasheets_model_id,
@@ -927,32 +1004,61 @@ def run_pipeline(
 
     uploaded: list[dict] = []
 
-    # Individual per-part XML files
+    # Individual per-part files: {part_name}.json (Cadence format) + {part_name}.cis.xml
     for part in result.selected_parts:
-        safe_mpn = part.mpn.replace("/", "-").replace("\\", "-").replace(" ", "_")
-        fname = f"{safe_mpn}.cis.xml"
-        xml_content = part_to_cis_xml(part)
-        (local_out / fname).write_text(xml_content, encoding="utf-8")
+        safe_name = part.part_name.replace("/", "-").replace("\\", "-").replace(" ", "_")
+
+        # --- {part_name}.json  (matches MIC28516T.json example format) ---
+        part_json_fname   = f"{safe_name}.json"
+        part_json_content = part_to_single_json(part)
+        (local_out / part_json_fname).write_text(part_json_content, encoding="utf-8")
 
         if dry_run:
-            print(f"  [dry-run] {fname} written locally")
+            print(f"  [dry-run] {part_json_fname} written locally")
         else:
-            tmp = Path(tempfile.gettempdir()) / fname
+            tmp = Path(tempfile.gettempdir()) / part_json_fname
+            tmp.write_text(part_json_content, encoding="utf-8")
+            resource = istari.upload_resource(
+                tmp, part_json_fname,
+                f"OrCAD part JSON [{part.mpn}] — pydantic-ai selector agent",
+            )
+            tmp.unlink(missing_ok=True)
+            istari.link_resources(req_revision_id, resource.file_revision_id)
+            uploaded.append({
+                "mpn":         part.mpn,
+                "file":        part_json_fname,
+                "resource_id": resource.resource_id,
+                "revision_id": resource.file_revision_id,
+                "req_ids":     part.source_requirement_ids,
+            })
+            print(f"  ✓ {part_json_fname}")
+            print(f"      resource_id={resource.resource_id}")
+            print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
+
+        # --- {part_name}.cis.xml ---
+        cis_fname   = f"{safe_name}.cis.xml"
+        xml_content = part_to_cis_xml(part)
+        (local_out / cis_fname).write_text(xml_content, encoding="utf-8")
+
+        if dry_run:
+            print(f"  [dry-run] {cis_fname} written locally")
+        else:
+            tmp = Path(tempfile.gettempdir()) / cis_fname
             tmp.write_text(xml_content, encoding="utf-8")
             resource = istari.upload_resource(
-                tmp, fname,
+                tmp, cis_fname,
                 f"OrCAD CIS part [{part.mpn}] — pydantic-ai selector agent",
             )
             tmp.unlink(missing_ok=True)
             istari.link_resources(req_revision_id, resource.file_revision_id)
             uploaded.append({
                 "mpn":         part.mpn,
-                "file":        fname,
+                "file":        cis_fname,
                 "resource_id": resource.resource_id,
                 "revision_id": resource.file_revision_id,
                 "req_ids":     part.source_requirement_ids,
             })
-            print(f"  ✓ {fname}")
+            print(f"  ✓ {cis_fname}")
             print(f"      resource_id={resource.resource_id}")
             print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
 
@@ -1024,6 +1130,59 @@ def run_pipeline(
         istari.link_resources(req_revision_id, resource.file_revision_id)
         print(f"  ✓ {bundle_fname}  →  resource_id={resource.resource_id}")
 
+    # ── UUID provenance record ────────────────────────────────────────────────
+    uuid_provenance: list[dict] = []
+
+    if requirements_model_id:
+        uuid_provenance.append({
+            "uuid":  requirements_model_id,
+            "role":  "source_model",
+            "type":  "model",
+            "label": "Istari model containing the requirements artifact",
+        })
+    if datasheets_model_id:
+        uuid_provenance.append({
+            "uuid":  datasheets_model_id,
+            "role":  "datasheets_model",
+            "type":  "model",
+            "label": "Istari model scanned for SE datasheet artifacts",
+        })
+
+    uuid_provenance.append({
+        "uuid":  requirements_id,
+        "role":  "requirements_source",
+        "type":  "resource",
+        "label": istari.get_resource_name(requirements_id) or "requirements.json",
+    })
+    uuid_provenance.append({
+        "uuid":  req_revision_id,
+        "role":  "requirements_revision",
+        "type":  "revision",
+        "label": "requirements.json revision used for LLM reasoning",
+    })
+
+    for rid, label in datasheet_resource_ids_used:
+        uuid_provenance.append({
+            "uuid":  rid,
+            "role":  "datasheet_input",
+            "type":  "resource",
+            "label": label,
+        })
+
+    for entry in uploaded:
+        uuid_provenance.append({
+            "uuid":  entry["resource_id"],
+            "role":  "output_resource",
+            "type":  "resource",
+            "label": entry["file"],
+        })
+        uuid_provenance.append({
+            "uuid":  entry["revision_id"],
+            "role":  "output_revision",
+            "type":  "revision",
+            "label": f"{entry['file']} (revision)",
+        })
+
     # Summary JSON
     summary = {
         "requirements_source":   requirements_id,
@@ -1034,9 +1193,10 @@ def run_pipeline(
         "unmatched_req_ids":     result.unmatched_req_ids,
         "notes":                 result.notes,
         "outputs": uploaded if not dry_run else [
-            {"mpn": p.mpn, "file": f"{p.mpn.replace('/', '-')}.cis.xml"}
+            {"mpn": p.mpn, "file": f"{p.part_name}.json"}
             for p in result.selected_parts
         ],
+        "uuid_provenance": uuid_provenance,
     }
     summary_fname = "part_selection_summary.json"
     (local_out / summary_fname).write_text(json.dumps(summary, indent=2))
@@ -1066,6 +1226,19 @@ def run_pipeline(
         for i, entry in enumerate(uploaded):
             connector = "└─" if i == len(uploaded) - 1 else "├─"
             print(f"     {connector} {entry['file']}  (id={entry['resource_id']})")
+
+    # ── UUID Provenance Summary ───────────────────────────────────────────────
+    print(f"\n{'═'*60}")
+    print("UUID Provenance — Istari resources used in this run")
+    print(f"{'═'*60}")
+    col_w = 38
+    print(f"  {'UUID':<{col_w}}  {'Role':<24}  Label")
+    print(f"  {'-'*col_w}  {'-'*24}  {'-'*30}")
+    for entry in uuid_provenance:
+        uuid_str = entry["uuid"] or "N/A"
+        print(f"  {uuid_str:<{col_w}}  {entry['role']:<24}  {entry['label']}")
+    print(f"\n  All UUIDs also recorded in: {local_out / 'part_selection_summary.json'}")
+    print(f"  (field: uuid_provenance)")
 
     return result
 
