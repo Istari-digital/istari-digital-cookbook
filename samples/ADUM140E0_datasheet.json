@@ -1,0 +1,87 @@
+[
+  {
+    "page_number": 1,
+    "paragraph_number": 1,
+    "text": "ADuM140E0 Quad-Channel, 5 kV Digital Isolator with 4/0 Channel Directionality. Data Sheet. Analog Devices. Rev. B."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 2,
+    "text": "FEATURES: Quad-channel digital isolator. Channel configuration: 4 inputs / 0 outputs (all channels unidirectional from side 1 to side 2). Isolation voltage: 5000 VRMS per UL 1577. Magnetic coupling technology (iCoupler). Data rate: up to 100 Mbps. Single 5 V supply compatible (2.7 V to 5.5 V). Operating temperature: -40°C to +125°C. SOIC-16 wide body package. Low propagation delay: 35 ns typical. High common-mode transient immunity (CMTI): >100 kV/µs."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 3,
+    "text": "APPLICATIONS: Industrial I/O isolation. Digital isolator for discrete input signals. Gate drive isolation. SPI/I2C isolation. RS-485 / RS-232 transceiver isolation. Motor drive feedback isolation. Medical isolation barriers. HVMC I/O board discrete input isolation."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 4,
+    "text": "GENERAL DESCRIPTION: The ADuM140E0 is a quad-channel, high speed, logic signal digital isolator based on Analog Devices' iCoupler technology. All four channels are configured in the same direction (4 channels from VDD1 side to VDD2 side). The device provides galvanic isolation between two circuit domains using magnetic coupling transformer technology. The ADuM140E0 replaces optocouplers with superior performance characteristics: lower power, higher speed, lower propagation delay, and longer lifetime."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 5,
+    "text": "ISOLATION TECHNOLOGY: iCoupler isolation uses on-chip transformers fabricated using a proprietary multi-layer CMOS process. The isolation barrier provides galvanic separation between the two voltage domains. The technology is inherently immune to light, magnetic field, and radiation interference. Isolation type: magnetic coupling (transformer-based). Isolation voltage: 5000 VRMS (UL 1577, 1 minute test). Working voltage (VW): 565 VPEAK. Insulation thickness: ≥25 µm of polyimide."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 6,
+    "text": "ORDERING INFORMATION: ADUM140E0BRWZ — quad-channel 4/0 isolator, 5 kV isolation, SOIC-16W package, Pb-free. ADUM140E0BRWZ-RL — reel packaging. Temperature range: -40°C to +125°C. The 'B' speed grade indicates 25 Mbps operation."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 7,
+    "text": "ELECTRICAL CHARACTERISTICS: VDD1 = VDD2 = 5.0 V, TA = 25°C, unless otherwise noted. Minimum input voltage (VIH): 0.7 × VDD1. Maximum input voltage (VIL): 0.3 × VDD1. Output high voltage (VOH): VDD2 − 0.2 V minimum. Output low voltage (VOL): 0.2 V maximum. Maximum data rate: 25 Mbps (B grade). Propagation delay: 35 ns typical, 60 ns maximum. Propagation delay skew (channel-to-channel): 10 ns maximum. Output current: ±10 mA."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 8,
+    "text": "POWER SUPPLY SPECIFICATIONS: VDD1 supply voltage: 2.7 V to 5.5 V. VDD2 supply voltage: 2.7 V to 5.5 V. Both VDD1 and VDD2 are compatible with 5 V rail operation. IDD1 supply current: 0.5 mA per channel typical at 1 Mbps. IDD2 supply current: 0.5 mA per channel typical. Total IDD at 5 V, 1 Mbps: 4 mA typical. Power-on behavior: outputs default low when supply is absent."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 9,
+    "text": "CHANNEL CONFIGURATION: The ADuM140E0 has 4 input channels (IA1, IA2, IA3, IA4) on the VDD1 side and 4 output channels (OB1, OB2, OB3, OB4) on the VDD2 side. All channels transfer signals from side 1 to side 2. This 4/0 configuration makes the device ideal for discrete input isolation where signals from a high-voltage external domain are transferred to a low-voltage microprocessor domain."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 10,
+    "text": "PIN DESCRIPTION: Pin 1 — VDD1: Power supply, input side (2.7 V to 5.5 V). Pin 2 — GND1: Ground, input side. Pin 3 — IA1: Channel 1 input. Pin 4 — IA2: Channel 2 input. Pin 5 — IA3: Channel 3 input. Pin 6 — IA4: Channel 4 input. Pin 7 — NC: No connect. Pin 8 — GND1: Ground, input side. Pin 9 — GND2: Ground, output side. Pin 10 — NC: No connect. Pin 11 — OB4: Channel 4 output. Pin 12 — OB3: Channel 3 output. Pin 13 — OB2: Channel 2 output. Pin 14 — OB1: Channel 1 output. Pin 15 — GND2: Ground, output side. Pin 16 — VDD2: Power supply, output side (2.7 V to 5.5 V)."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 11,
+    "text": "SAFETY AND REGULATORY: UL recognized (File E214100). CSA certified (File 205078). VDE certified (Certificate 40041100). IEC 61010-1: reinforced isolation, 600 V overvoltage category II. IEC 60950-1: reinforced isolation. EN 55022 Class B: EMC emissions. EN 61000-4-4: EFT immunity. Surge immunity: 4 kV per IEC 61000-4-5."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 12,
+    "text": "PACKAGE INFORMATION: SOIC-16W (wide body). Package code: RWZ. Body dimensions: 10.3 mm × 7.5 mm. Height: 2.35 mm maximum. Pitch: 1.27 mm. PCB footprint: SOIC-16W. Lead finish: Sn (Pb-free). Moisture sensitivity level: MSL1. RoHS compliant."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 13,
+    "text": "ABSOLUTE MAXIMUM RATINGS: VDD1 or VDD2 to respective GND: -0.5 V to +7 V. Input voltage (IA1–IA4): -0.5 V to VDD1 + 0.5 V. Output voltage (OB1–OB4): -0.5 V to VDD2 + 0.5 V. Storage temperature: -65°C to +150°C. Maximum junction temperature: 150°C. ESD rating (HBM): 2 kV. Latch-up current: 100 mA."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 14,
+    "text": "APPLICATIONS INFORMATION — HVMC I/O BOARD: The ADuM140E0 is selected for the discrete input digital isolator function on the HVMC I/O board. VDD1 is powered from the 5 V rail on the external (field) side and VDD2 is powered from the 5 V rail on the processor side. The 4-channel configuration (4 inputs / 0 outputs in this channel variant) matches the requirement for 4 input and 4 output discrete channels — two devices may be used for bidirectional requirements, or the ADUM140E0BRWZ covers 4 input channels from field to processor. The magnetic coupling isolation type provides immunity to high-voltage transients from the field side."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 15,
+    "text": "COMMON-MODE TRANSIENT IMMUNITY: The ADuM140E0 maintains correct output state in the presence of common-mode voltage transients. CMTI: greater than 100 kV/µs. This allows the isolator to be used in applications with fast-switching power converters, motor drives, and other high dv/dt environments without corrupting the isolated data."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 16,
+    "text": "POWER SEQUENCING: Both VDD1 and VDD2 can be powered independently. The output defaults to a low state if either supply is not present. There is no specific power sequencing requirement; VDD1 and VDD2 may come up in any order. The device is not sensitive to supply sequencing, making it suitable for systems where isolated power supplies come up at different times."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 17,
+    "text": "COMPLIANCE: RoHS compliant (6/6 substances). REACH compliant. Pb-free. AEC-Q100 qualified (automotive grade, -40°C to +125°C). ISO 9001:2015 manufacturing. CE marking. WEEE compliant."
+  }
+]

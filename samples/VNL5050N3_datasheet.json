@@ -1,0 +1,82 @@
+[
+  {
+    "page_number": 1,
+    "paragraph_number": 1,
+    "text": "VNL5050N3-E Intelligent Power Switch — Low-Side Driver / N-Channel Power MOSFET with Integrated Gate Driver. Data Sheet. STMicroelectronics. Rev. 8."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 2,
+    "text": "FEATURES: N-channel enhancement mode power MOSFET. Maximum drain current (ID): 2.0 A (continuous). Maximum drain-source voltage (VDSS): 40 V. On-state resistance (RDS(on)): 0.25 Ω typical at VGS = 10 V. Logic-level gate drive: 5 V compatible. Internal ESD protection diode. Overcurrent protection. Thermal shutdown. Open-load detection. Reverse battery protection. DPAK-3 package. Meets automotive AEC-Q101 requirements."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 3,
+    "text": "APPLICATIONS: Automotive and industrial discrete output drivers. Resistive load switching. Inductive load switching. Relay driver. Solenoid driver. LED current control. HVMC I/O board discrete output power driver. Load switching from 5 V logic."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 4,
+    "text": "GENERAL DESCRIPTION: The VNL5050N3-E is an intelligent power switch integrating an N-channel MOSFET, gate driver, and protection circuitry in a single package. The device is designed for low-side switching of resistive, capacitive, and inductive loads. The logic-level input is compatible with 3.3 V and 5 V microcontroller outputs. Internal protection features include overtemperature shutdown, overcurrent protection, and clamp circuitry for inductive loads."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 5,
+    "text": "ORDERING INFORMATION: VNL5050N3TR-E — intelligent low-side switch, 2 A, 40 V, DPAK-3 package, tape and reel. VNL5050N3-E — tray packaging. AEC-Q101 qualified. Temperature range: -40°C to +150°C. The 'TR' suffix indicates tape and reel packaging for automated assembly."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 6,
+    "text": "ELECTRICAL CHARACTERISTICS: TA = 25°C, VDD = 5 V, unless otherwise noted. Drain-source voltage (VDSS): 40 V maximum. Gate-source voltage (VGSS): ±20 V maximum. Continuous drain current (ID) at TC = 25°C: 2.0 A. Continuous drain current at TC = 70°C: 1.4 A. Pulsed drain current (IDM): 8 A. Power dissipation at TC = 25°C: 15 W. Junction-to-case thermal resistance (RθJC): 8.3°C/W."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 7,
+    "text": "ON-STATE CHARACTERISTICS: Drain-source on-resistance (RDS(on)) at VGS = 10 V, ID = 1 A: 0.25 Ω typical, 0.40 Ω maximum. RDS(on) at VGS = 5 V (logic-level operation): 0.35 Ω typical, 0.55 Ω maximum. Gate threshold voltage (VGS(th)): 1.0 V minimum, 2.0 V maximum. Zero gate voltage drain current (IDSS): 1 µA maximum at VDSS = 36 V, TA = 125°C."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 8,
+    "text": "POWER SUPPLY SPECIFICATIONS: VDD logic supply voltage: 3.0 V to 5.5 V. The device is designed to be powered from a 5 V logic supply rail. Gate driver supply drawn from VDD. IDD quiescent current: 0.5 mA typical. The load voltage (drain side) can be up to 36 V independently from VDD. Load supply voltage range (VS): 0 V to 36 V maximum."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 9,
+    "text": "SWITCHING CHARACTERISTICS: Turn-on delay time (td(on)): 100 ns typical. Rise time (tr): 80 ns typical. Turn-off delay time (td(off)): 150 ns typical. Fall time (tf): 100 ns typical. Gate charge (QG): 5 nC at VGS = 10 V. Gate capacitance (CISS): 350 pF typical. Output capacitance (COSS): 60 pF typical."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 10,
+    "text": "PROTECTION FEATURES: Overtemperature protection (OTP): junction temperature threshold 175°C, auto-restart on cooling. Overcurrent protection: current limit at 4 A typical. Inductive load clamp: integrated avalanche clamp for inductive kick protection. Reverse battery protection: internal protection against reverse supply connection. Open-load detection: detects broken wire or disconnected load in standby state. ESD protection: 2 kV HBM on all pins."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 11,
+    "text": "PIN DESCRIPTION: Pin 1 — IN: Logic control input. High = MOSFET on. Low = MOSFET off. Compatible with 3.3 V and 5 V logic. Pin 2 — GND: Device ground reference. Pin 3 — OUT (Drain): Drain connection to load. Maximum voltage: 40 V. Exposed paddle (Pin 4/tab) — GND/heatsink: Thermal pad, connected to GND. Provides primary heat dissipation path."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 12,
+    "text": "PACKAGE INFORMATION: DPAK-3 (TO-252-3). PCB footprint designator: DPAK or TO-252. Package dimensions: 6.6 mm × 6.1 mm body plus tab. Height: 2.3 mm maximum. Lead pitch: 2.286 mm. Tab provides heatsinking to PCB copper. Lead finish: Sn (Pb-free). MSL rating: MSL1. RoHS compliant."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 13,
+    "text": "ABSOLUTE MAXIMUM RATINGS: Drain-source voltage (VDSS): 40 V. Gate-source voltage (VGSS): ±20 V. Drain current (ID): 2 A continuous (at TC = 25°C). Pulsed drain current (IDM): 8 A. Power dissipation: 15 W (TC = 25°C). Storage temperature: -55°C to +150°C. Maximum operating junction temperature (TJ): 150°C. ESD (HBM): 2 kV."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 14,
+    "text": "APPLICATIONS INFORMATION — HVMC I/O BOARD: The VNL5050N3TR-E is configured as a low-side discrete output power driver on the HVMC I/O board. The VDD supply pin is connected to the 5 V rail. The IN pin is driven directly from a 3.3 V or 5 V GPIO output of the main processor. The OUT (drain) pin connects to the load, which is returned to a supply up to 36 V. The 2 A continuous drain current capability meets the 2 A maximum output drain current requirement. The 40 V VDSS rating covers loads at up to 36 V maximum with margin."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 15,
+    "text": "THERMAL MANAGEMENT: At 2 A load current and RDS(on) = 0.35 Ω: conduction loss = 2² × 0.35 = 1.4 W. With θJC = 8.3°C/W and θCA = 30°C/W (PCB copper heatsink): TJ = 25 + (1.4 × 38.3) = 79°C. This is well within the 150°C maximum junction temperature rating. For higher ambient temperatures or sustained high-current operation, increase copper area on PCB under the exposed pad."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 16,
+    "text": "COMPLIANCE: RoHS compliant (2011/65/EU). REACH compliant. Pb-free. AEC-Q101 automotive qualified. ISO 9001:2015 and IATF 16949:2016 manufacturing. CE mark. WEEE compliant. ELV directive compliant. Temperature grade: -40°C to +150°C."
+  }
+]
