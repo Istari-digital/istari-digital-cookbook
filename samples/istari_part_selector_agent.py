@@ -30,6 +30,10 @@ Usage:
   python istari_part_selector_agent.py \\
       --model-id <UUID> --requirements-id <UUID> --provider openai --model gpt-4o
 
+  # Use a specific datasheet resource instead of scanning the model:
+  python istari_part_selector_agent.py \\
+      --model-id <UUID> --datasheet-id <UUID> --provider anthropic
+
   # Dry run (write XML locally only, no Istari upload):
   python istari_part_selector_agent.py \\
       --model-id <UUID> --dry-run
@@ -920,20 +924,23 @@ def run_pipeline(
     model_id: str,
     dry_run: bool = False,
     requirements_id: str | None = None,
+    datasheet_id: str | None = None,
 ) -> PartSelectionOutput:
     """
     Run the part selection pipeline.
 
     Args:
-        model_id: Istari model ID — scanned for both requirements and datasheet artifacts.
+        model_id: Istari model ID — scanned for requirements artifact and (when
+            datasheet_id is not given) also for SE datasheet artifacts.
         requirements_id: Optional specific resource ID for requirements. If omitted,
             the agent auto-discovers the requirements.json artifact on model_id.
+        datasheet_id: Optional explicit resource ID of a single SE datasheet artifact.
+            When provided, only that datasheet is used and the model artifact scan is skipped.
     """
 
     # ── Step 1: Fetch requirements ────────────────────────────────────────────
     if requirements_id:
         print(f"\n[1/4] Using pinned requirements resource (resource_id={requirements_id}) ...")
-        print(f"      Datasheet artifacts will be discovered from model {model_id}")
     else:
         print(f"\n[1/4] Locating requirements artifact on model {model_id} ...")
         requirements_id = istari.find_requirements_resource_id(model_id)
@@ -948,33 +955,36 @@ def run_pipeline(
         print("No actionable requirements — nothing to select.")
         return PartSelectionOutput(selected_parts=[], unmatched_req_ids=[])
 
-    # ── Step 2: Discover SE datasheets on the same model ─────────────────────
-    print(f"\n[2/4] Discovering Silicon Expert datasheet artifacts on model {model_id} ...")
+    # ── Step 2: Load SE datasheets ────────────────────────────────────────────
+    datasheet_resource_ids_used: list[tuple[str, str]] = []
 
-    found = istari.find_datasheet_resource_ids(model_id)
-    if not found:
-        print(f"ERROR: no SE datasheet JSON artifacts found on model {model_id}.")
-        print(f"       Expected artifact filenames containing one of: {DATASHEET_PATTERNS}")
-        print(f"       Upload your SE datasheet JSON files as artifacts on this model and retry.")
-        sys.exit(1)
+    if datasheet_id:
+        label = istari.get_resource_name(datasheet_id) or datasheet_id
+        print(f"\n[2/4] Using explicit datasheet resource: '{label}' (resource_id={datasheet_id})")
+        datasheet_resource_ids_used = [(datasheet_id, label)]
+    else:
+        print(f"\n[2/4] Discovering Silicon Expert datasheet artifacts on model {model_id} ...")
+        found = istari.find_datasheet_resource_ids(model_id)
+        if not found:
+            print(f"ERROR: no SE datasheet JSON artifacts found on model {model_id}.")
+            print(f"       Expected artifact filenames containing one of: {DATASHEET_PATTERNS}")
+            print(f"       Upload your SE datasheet JSON files as artifacts on this model,")
+            print(f"       or pass --datasheet-id <UUID> to specify one explicitly.")
+            sys.exit(1)
+        print(f"      Found {len(found)} datasheet artifact(s):")
+        for fname, rid in found:
+            print(f"      '{fname}'  (resource_id={rid})")
+        datasheet_resource_ids_used = list(found)
 
-    print(f"      Found {len(found)} datasheet artifact(s):")
-    for fname, rid in found:
-        print(f"      '{fname}'  (resource_id={rid})")
-
-    # [(resource_id, label)] — used later for UUID provenance
-    datasheet_resource_ids_used: list[tuple[str, str]] = list(found)
-
-    # Load directly from the already-discovered resource IDs (no second model scan)
     datasheets = load_datasheets_from_istari(
         istari,
         model_id=None,
-        resource_ids=[rid for rid, _ in found],
+        resource_ids=[rid for rid, _ in datasheet_resource_ids_used],
     )
     print(f"      {len(datasheets)} part datasheet(s) loaded")
 
     if not datasheets:
-        print("ERROR: datasheet artifacts were found but could not be parsed.")
+        print("ERROR: datasheet artifact(s) could not be parsed.")
         sys.exit(1)
 
     # ── Step 3: LLM selection ─────────────────────────────────────────────────
@@ -1307,6 +1317,11 @@ def parse_args() -> argparse.Namespace:
                          "auto-discovering it from --model-id. Datasheets are still "
                          "discovered from --model-id automatically."
                      ))
+    src.add_argument("--datasheet-id", metavar="UUID", default=None,
+                     help=(
+                         "Optional: Istari resource ID of a single SE datasheet JSON artifact. "
+                         "When provided, only this datasheet is used (model artifact scan is skipped)."
+                     ))
 
     # LLM
     llm = p.add_argument_group("LLM provider")
@@ -1383,7 +1398,10 @@ def main() -> None:
         print(f"  Requirements ID (pinned): {args.requirements_id}")
     else:
         print(f"  Requirements: auto-discovered from model")
-    print(f"  Datasheets:  auto-discovered from model")
+    if args.datasheet_id:
+        print(f"  Datasheet ID: {args.datasheet_id}")
+    else:
+        print(f"  Datasheets:  auto-discovered from model")
     print(f"  Dry run:     {args.dry_run}")
 
     run_pipeline(
@@ -1393,6 +1411,7 @@ def main() -> None:
         model_id=args.model_id,
         dry_run=args.dry_run,
         requirements_id=args.requirements_id,
+        datasheet_id=args.datasheet_id,
     )
 
 
