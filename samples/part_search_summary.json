@@ -1,0 +1,60 @@
+{
+  "model_id": "e5e3b262-31ba-4588-bc08-2f6d731e24c7",
+  "requirements_source": "c8022868-84fa-44b7-9513-bc7794992de7",
+  "requirements_revision": "b7f37b22-7c70-4444-9bf1-47a92cce8059",
+  "model": "gpt-4o",
+  "total_requirements": 21,
+  "classified": 10,
+  "skipped": 8,
+  "skipped_ids": [
+    "46.2",
+    "49.2",
+    "49",
+    "46",
+    "47",
+    "45.2",
+    "48",
+    "45"
+  ],
+  "specs_generated": 1,
+  "outputs": [
+    {
+      "req_id": "HW:47.3",
+      "file": "HW:47.3_se_part_search.json",
+      "resource_id": "8739141e-f21e-4551-a150-10874a18f41d",
+      "revision_id": "f9e95877-9156-47c6-b0fc-c420d9569665"
+    }
+  ],
+  "uuid_provenance": [
+    {
+      "uuid": "e5e3b262-31ba-4588-bc08-2f6d731e24c7",
+      "role": "source_model",
+      "type": "model",
+      "label": "Istari model containing the requirements artifact"
+    },
+    {
+      "uuid": "c8022868-84fa-44b7-9513-bc7794992de7",
+      "role": "requirements_source",
+      "type": "resource",
+      "label": "requirements.json"
+    },
+    {
+      "uuid": "b7f37b22-7c70-4444-9bf1-47a92cce8059",
+      "role": "requirements_revision",
+      "type": "revision",
+      "label": "requirements.json (revision used for reasoning)"
+    },
+    {
+      "uuid": "8739141e-f21e-4551-a150-10874a18f41d",
+      "role": "output_resource",
+      "type": "resource",
+      "label": "HW:47.3_se_part_search.json"
+    },
+    {
+      "uuid": "f9e95877-9156-47c6-b0fc-c420d9569665",
+      "role": "output_revision",
+      "type": "revision",
+      "label": "HW:47.3_se_part_search.json (revision)"
+    }
+  ]
+}
