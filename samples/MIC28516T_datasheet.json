@@ -1,0 +1,92 @@
+[
+  {
+    "page_number": 1,
+    "paragraph_number": 1,
+    "text": "MIC28516T 28V Input, 8A Output, High-Efficiency Synchronous Buck Regulator. Data Sheet. Microchip Technology Inc. DS20005857A. © 2017 Microchip Technology Inc."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 2,
+    "text": "FEATURES: Input voltage range: 4.5 V to 28 V. Output current: 8 A continuous. Output voltage: 0.8 V to 22 V (adjustable). High efficiency: up to 97%. Switching frequency: 300 kHz to 2 MHz (programmable). Synchronous rectification. Integrated high-side and low-side MOSFETs. Soft-start / soft-stop. Power Good indicator. Enable input. Adjustable current limit. Hiccup mode overload protection. Thermal shutdown. TSSOP-16 package. -40°C to +125°C operating temperature."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 3,
+    "text": "APPLICATIONS: Point-of-load power conversion. Industrial equipment power supplies. Military and aerospace power regulation. HVMC I/O board power and utility buck regulator. High-side 28V bus step-down to 5V, 3.3V, or other intermediate rails. Distributed power architectures."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 4,
+    "text": "GENERAL DESCRIPTION: The MIC28516T is a high-performance synchronous buck (step-down) DC-DC regulator capable of delivering up to 8 A of continuous output current. The device accepts a wide input voltage range from 4.5 V to 28 V and regulates to any output voltage between 0.8 V and 22 V using an external resistor divider. Synchronous rectification with integrated N-channel MOSFETs eliminates external rectifier diodes and improves efficiency. The output voltage is positive (step-down conversion), making this device a buck-topology power converter."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 5,
+    "text": "ORDERING INFORMATION: MIC28516T-E/PHA — 8A synchronous buck regulator, 28V input, TSSOP-16EP package, extended temperature range (-40°C to +125°C), tape and reel. MIC28516T-E/PHA-TR — same device, large reel quantity. The 'E' prefix indicates the extended temperature range."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 6,
+    "text": "ELECTRICAL CHARACTERISTICS: VIN = 12 V, VOUT = 3.3 V, TA = 25°C, fSW = 500 kHz, unless otherwise noted. Input voltage range: 4.5 V to 28 V. Output current: 0 A to 8 A. Output voltage accuracy: ±1% at 25°C. Load regulation: ±0.5% over 0 to 8 A. Line regulation: ±0.3% over 4.5 V to 28 V input. Feedback reference voltage: 0.800 V ± 1%. Quiescent current: 3 mA typical."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 7,
+    "text": "POWER SUPPLY INPUT SPECIFICATIONS: Input voltage (VIN): 4.5 V to 28 V absolute range. Recommended maximum supply voltage: 28 V. Input undervoltage lockout (UVLO): rising threshold 4.2 V, falling threshold 3.9 V. Input reverse voltage protection: not built-in (use external Schottky diode). Input capacitor requirement: 47 µF ceramic or electrolytic minimum."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 8,
+    "text": "OUTPUT CHARACTERISTICS: Output current (IOUT): 8 A continuous, 10 A peak (200 µs maximum). Output voltage: programmable from 0.8 V to 22 V using resistor divider on FB pin. Output voltage polarity: positive (buck topology — always step-down, always positive). Output capacitor requirement: minimum 100 µF total. Output ripple voltage: <1% of VOUT at rated current. Output soft-start time: 1 ms to 8 ms (programmable)."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 9,
+    "text": "EFFICIENCY: At VIN = 28 V, VOUT = 5 V, IOUT = 8 A, fSW = 500 kHz: Efficiency = 93%. At VIN = 28 V, VOUT = 3.3 V, IOUT = 8 A: Efficiency = 91%. At VIN = 28 V, VOUT = 5 V, IOUT = 1 A: Efficiency = 89% (light load). Peak efficiency: 97% at mid-load with optimal switching frequency. Efficiency varies with VIN/VOUT ratio and load current."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 10,
+    "text": "SWITCHING CHARACTERISTICS: Switching frequency range: 300 kHz to 2 MHz, set by external resistor on FREQ pin. Default frequency (FREQ pin open): 500 kHz. High-side MOSFET on-resistance: 30 mΩ typical. Low-side MOSFET on-resistance: 20 mΩ typical. Dead time: 20 ns typical. Bootstrap capacitor: 100 nF recommended."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 11,
+    "text": "PIN DESCRIPTION (TSSOP-16): Pin 1 — VIN: Power input (4.5 V to 28 V). Pin 2 — EN: Enable input, active high, 1.2 V threshold. Pin 3 — VOUT: Output voltage sense. Pin 4 — GND: Signal and power ground. Pin 5 — FB: Feedback input (0.8 V reference). Pin 6 — COMP: Error amplifier compensation. Pin 7 — SS: Soft-start capacitor. Pin 8 — FREQ: Switching frequency set resistor. Pin 9 — PG: Power Good output, open drain. Pin 10 — ILIM: Current limit set. Pin 11–12 — SW: Switching node (connect inductor here). Pin 13–14 — VIN: Additional input supply pins (parallel for current capability). Pin 15 — BOOT: Bootstrap supply for high-side gate driver. Pin 16 — GND: Power ground. Exposed pad (EP) — GND: Thermal pad, must be soldered to ground plane."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 12,
+    "text": "PROTECTION FEATURES: Cycle-by-cycle current limiting: peak current limited to adjustable threshold (default 12 A). Hiccup mode overload: device enters low-duty-cycle hiccup mode under sustained overload. Thermal shutdown: activates at TJ = 150°C, auto-restart at 130°C. Output overvoltage protection (OVP): triggers at 110% of set VOUT. Undervoltage lockout (UVLO): prevents operation below 4.2 V input."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 13,
+    "text": "PACKAGE INFORMATION: TSSOP-16EP (Thin Shrink Small Outline Package, 16-lead with Exposed Pad). Package designator: PH. Body dimensions: 4.4 mm × 5.0 mm. Height: 1.1 mm maximum. Pitch: 0.65 mm. Exposed thermal pad: 3.0 mm × 2.5 mm on bottom. Must be soldered for proper thermal performance. PCB footprint: TSSOP-16. RoHS compliant."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 14,
+    "text": "ABSOLUTE MAXIMUM RATINGS: VIN to GND: -0.3 V to +30 V. SW node (VSW): -1 V to VIN + 0.3 V. BOOT pin: VSW to VSW + 7 V. EN, FB, COMP, SS, FREQ, ILIM, PG: -0.3 V to +6 V. Maximum junction temperature: 150°C. Storage temperature: -65°C to +150°C. ESD rating (HBM): 2 kV."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 15,
+    "text": "APPLICATIONS INFORMATION — HVMC I/O BOARD: The MIC28516T-E/PHA is the selected power and utility buck switching regulator for the HVMC I/O board. VIN is connected to the 28 V supply rail. The output voltage is set by an external resistor divider on the FB pin (typically 5 V or 3.3 V for board rails). The device produces a positive regulated output voltage at 8 A continuous output current. The EN pin is controlled by the power management sequencing logic. Power Good (PG) output signals downstream loads that the rail is valid."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 16,
+    "text": "DESIGN EXAMPLE: VIN = 28 V, VOUT = 5 V, IOUT = 8 A, fSW = 500 kHz. Inductor: 4.7 µH, 10 A rated. Output capacitors: 3× 100 µF ceramic. Input capacitors: 2× 47 µF ceramic. R_FB_TOP = 100 kΩ. R_FB_BOT = R_FB_TOP × (0.8 / (VOUT - 0.8)) = 100k × (0.8/4.2) = 19.05 kΩ, use 19.1 kΩ 1%. Calculated efficiency at full load: 93% typical."
+  },
+  {
+    "page_number": 8,
+    "paragraph_number": 17,
+    "text": "THERMAL PERFORMANCE: At VIN = 28 V, VOUT = 5 V, IOUT = 8 A: Power dissipation = (1-0.93) × 5 × 8 = 2.8 W. Thermal resistance θJA (with exposed pad soldered to 2-layer PCB, 1 in² copper): 30°C/W. Maximum ambient temperature: TJ_max - (PD × θJA) = 150 - (2.8 × 30) = 66°C. For higher ambient, increase PCB copper area or add external heatsinking."
+  },
+  {
+    "page_number": 8,
+    "paragraph_number": 18,
+    "text": "COMPLIANCE: RoHS compliant. REACH compliant. Pb-free. AEC-Q100 Grade 1 (-40°C to +125°C). Manufactured per ISO 9001:2015. UL recognized component. CE mark. WEEE compliant. MSL rating: MSL3. ESD sensitivity: Class 2 (HBM 2 kV)."
+  }
+]

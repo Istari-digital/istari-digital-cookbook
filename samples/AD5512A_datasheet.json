@@ -1,0 +1,92 @@
+[
+  {
+    "page_number": 1,
+    "paragraph_number": 1,
+    "text": "AD5512A 12-Bit, Single-Channel, Serial Input, Voltage Output DAC. Data Sheet. Rev. C. Information furnished by Analog Devices is believed to be accurate and reliable. However, no responsibility is assumed by Analog Devices for its use, nor for any infringements of patents or other rights of third parties that may result from its use."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 2,
+    "text": "FEATURES: Single-channel voltage output DAC. 12-bit resolution. 3.3V single-supply operation. SPI-compatible serial interface. Rail-to-rail output. Power-on reset to 0V. On-chip precision reference. 2.7V to 5.5V supply range. 12 ns minimum CSb low time. 50 MHz SPI clock rate. LFCSP package. AEC-Q100 qualified."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 3,
+    "text": "APPLICATIONS: Industrial process control. Programmable voltage and current sources. Automatic test equipment. Data acquisition systems. Motor control. Medical instrumentation."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 4,
+    "text": "GENERAL DESCRIPTION: The AD5512A is a single-channel, 12-bit, serial input, voltage output digital-to-analog converter (DAC) that operates from a single 2.7 V to 5.5 V supply. The device includes an on-chip 2.5 V precision reference and provides a rail-to-rail output swing. The device offers 3-wire SPI-compatible serial interface operating at clock rates up to 50 MHz. The output voltage range is 0 V to VREF (approximately 2.5 V internal reference) or 0 V to 5 V when using an external reference. Output voltage: VOUT = (D/4096) × VREF × gain."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 5,
+    "text": "ORDERING INFORMATION: AD5512AACPZ-REEL7 — 12-bit single-channel DAC, 5V supply compatible, LFCSP-10 package, tape and reel packaging. AD5512AACPZ — same device, tray packaging. Temperature range: -40°C to +125°C."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 6,
+    "text": "ELECTRICAL CHARACTERISTICS: VDD = 3.3 V, VREF = 2.5 V, RL = 2 kΩ to GND, CL = 100 pF, unless otherwise noted. Resolution: 12 bits. Relative accuracy (INL): ±2 LSB maximum. Differential nonlinearity (DNL): ±1 LSB maximum. Zero-scale error: ±4 mV maximum. Full-scale error: ±4 mV maximum. Output noise: 30 nV/√Hz at 1 kHz."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 7,
+    "text": "POWER SUPPLY SPECIFICATIONS: VDD supply voltage: 2.7 V to 5.5 V. Recommended supply: 3.3 V ± 10%. IDD supply current: 1.5 mA typical, 2.0 mA maximum at 3.3 V. Power-down mode current: 1 µA maximum. The device is fully functional from a 3.3 V single power rail with no additional supply rails required."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 8,
+    "text": "OUTPUT CHARACTERISTICS: Output voltage range: 0 V to VOUT_MAX. When using the internal 2.5 V reference with 2× gain enabled, VOUT_MAX = 5.0 V. Rail-to-rail output: output swings to within 5 mV of supply rails. Output short-circuit current: 20 mA. Settling time to 0.5 LSB: 7 µs. Slew rate: 0.7 V/µs."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 9,
+    "text": "SERIAL INTERFACE: The AD5512A uses a 3-wire SPI-compatible interface consisting of SCLK (serial clock), SDI (serial data input), and CSb (chip select, active low). Data is clocked in MSB first on the rising edge of SCLK. Maximum SCLK frequency: 50 MHz. The 24-bit input shift register includes 4 address bits and 12 data bits. VLOGIC pin sets the logic threshold independently from VDD, allowing interfacing with 1.8 V, 2.5 V, or 3.3 V logic systems."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 10,
+    "text": "INTERFACE TIMING: Minimum CSb low time: 12 ns. Minimum SCLK high time: 10 ns. Minimum SCLK low time: 10 ns. Setup time SDI to SCLK rising edge: 5 ns. Hold time SDI after SCLK rising edge: 5 ns. CSb rising edge to SCLK rising edge: 20 ns."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 11,
+    "text": "PIN DESCRIPTION: Pin 1 — SDI: Serial data input. Pin 2 — CSb: Chip select, active low. Pin 3 — SCLK: Serial clock input. Pin 4 — GND: Ground reference. Pin 5 — VOUT: Analog voltage output. Pin 6 — VDD: Power supply (2.7 V to 5.5 V). Pin 7 — VREF: External reference input / internal reference output. Pin 8 — VLOGIC: Logic supply voltage (1.71 V to VDD). Pin 9 — LDAC: Load DAC input, active low. Pin 10 — CLR: Clear input, active low, resets output to 0 V."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 12,
+    "text": "PACKAGE INFORMATION: 10-lead LFCSP (Lead Frame Chip Scale Package). Package designator: CP-10-2. Dimensions: 3 mm × 3 mm body. Height: 0.75 mm. Pitch: 0.5 mm. Exposed paddle on bottom for thermal dissipation. PCB footprint: LFCSP-10. RoHS compliant."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 13,
+    "text": "ABSOLUTE MAXIMUM RATINGS: VDD to GND: -0.3 V to +7 V. SDI, SCLK, CSb, LDAC, CLR to GND: -0.3 V to VDD + 0.3 V or 6 V, whichever is less. VOUT to GND: -0.3 V to VDD + 0.3 V. VREF to GND: -0.3 V to VDD + 0.3 V. Maximum junction temperature: 150°C. Storage temperature range: -65°C to +150°C. ESD rating (HBM): 4 kV."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 14,
+    "text": "REFERENCE OPERATION: The AD5512A includes a precision 2.5 V internal voltage reference. The temperature coefficient of the reference is 10 ppm/°C typical. When the GAIN bit is set to 1, the output amplifier gain is 2×, providing a full-scale output of 5.0 V from the internal reference. An external reference can be used by driving the VREF pin. The internal reference can source or sink up to 1 mA."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 15,
+    "text": "POWER-ON RESET: At power-on, all registers are reset to zero scale (0x000), which forces VOUT to 0 V. The CLR pin resets the DAC to the power-on reset code. In hardware mode, pulling CLR low asynchronously resets the DAC output to 0 V regardless of the contents of the serial input register. Power supply sequencing: bring VDD up before or simultaneously with VLOGIC."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 16,
+    "text": "TYPICAL PERFORMANCE: At VDD = 3.3 V, 25°C, VREF_INT = 2.5 V, gain = 2: Output voltage at full scale (code = 4095): 4.997 V. Output voltage at mid-scale (code = 2048): 2.500 V. Noise spectral density: 35 nV/√Hz at 10 kHz. Total harmonic distortion: -80 dBc at 1 kHz. Settling time (to 16-bit accuracy): 10 µs."
+  },
+  {
+    "page_number": 8,
+    "paragraph_number": 17,
+    "text": "APPLICATIONS INFORMATION: For the HVMC I/O board analog output application, the AD5512A is configured with VDD = 3.3 V from the main power rail. The internal 2.5 V reference is used with gain = 2 to achieve a 0 V to 5 V output range on VOUT. SPI communication is routed to the main processor at 3.3 V logic levels. A 100 nF decoupling capacitor is placed between VDD and GND close to the device. A 10 µF bulk capacitor is used on the reference output."
+  },
+  {
+    "page_number": 8,
+    "paragraph_number": 18,
+    "text": "COMPLIANCE: RoHS compliant. Pb-free. REACH compliant. AEC-Q100 Grade 1 qualified (-40°C to +125°C). JEDEC JESD47 qualified. MSL rating: MSL1. ESD sensitivity class: Class 2 (HBM). Manufactured in compliance with ISO 9001:2015. UL recognized component."
+  }
+]

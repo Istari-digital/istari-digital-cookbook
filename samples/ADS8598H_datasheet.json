@@ -1,0 +1,92 @@
+[
+  {
+    "page_number": 1,
+    "paragraph_number": 1,
+    "text": "ADS8598H 8-Channel, 18-Bit, Simultaneous Sampling Analog-to-Digital Converter with Parallel and Serial Interface. Data Sheet. SBAS498D. Texas Instruments. Copyright 2011–2017."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 2,
+    "text": "FEATURES: 8 simultaneous-sampling input channels. 18-bit resolution, no missing codes. Input voltage range: ±10 V, ±5 V, 0 V to 10 V, 0 V to 5 V (pin selectable). Throughput: 200 kSPS per channel. Parallel and serial (SPI-compatible) output interfaces. On-chip 4.096 V precision reference. Internal oscillator for conversion timing. Single 5 V supply operation. On-chip programmable gain amplifier (PGA). INL: ±1 LSB (maximum), DNL: ±1 LSB (maximum). SSOP-56 package."
+  },
+  {
+    "page_number": 1,
+    "paragraph_number": 3,
+    "text": "APPLICATIONS: Industrial process control. Data acquisition systems. Power quality monitoring. Motion control. Medical imaging. Test and measurement. HVMC I/O board analog input acquisition."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 4,
+    "text": "GENERAL DESCRIPTION: The ADS8598H is an 8-channel, 18-bit, simultaneous-sampling analog-to-digital converter (ADC). The device accepts bipolar analog input voltages up to ±10 V and converts them to 18-bit digital codes. The ±10 V input range is selected using the RANGE pin. All 8 channels are sampled simultaneously on the CONVST signal, enabling phase-accurate measurements across multiple channels. The device provides both parallel and serial interfaces for maximum flexibility."
+  },
+  {
+    "page_number": 2,
+    "paragraph_number": 5,
+    "text": "ORDERING INFORMATION: ADS8598HIPM — 18-bit, 8-channel ADC, ±10 V input, SSOP-56 package, industrial temperature range. ADS8598HIPMR — tape and reel. Operating temperature: -40°C to +85°C. Storage temperature: -65°C to +150°C."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 6,
+    "text": "ELECTRICAL CHARACTERISTICS: AVDD = 5 V, DVDD = 5 V, REF = internal 4.096 V, RANGE = ±10 V, fCLK = internal, TA = 25°C, unless otherwise noted. Resolution: 18 bits. No missing codes: guaranteed. Integral nonlinearity (INL): ±1 LSB typical, ±2 LSB maximum. Differential nonlinearity (DNL): ±0.5 LSB typical, ±1 LSB maximum. Signal-to-noise ratio (SNR): 99 dB typical. Total harmonic distortion (THD): -115 dBc typical. Spurious-free dynamic range (SFDR): 115 dBc typical."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 7,
+    "text": "INPUT CHARACTERISTICS: Analog input voltage range: ±10 V (RANGE = HIGH), ±5 V (RANGE = LOW), 0 V to 10 V or 0 V to 5 V (unipolar modes). Input impedance: 12 kΩ differential. Maximum input overvoltage: ±16.5 V continuous. Input capacitance: 45 pF per channel. Sampling aperture uncertainty (jitter): 50 ps rms. Channel-to-channel crosstalk: -120 dB at 1 kHz."
+  },
+  {
+    "page_number": 3,
+    "paragraph_number": 8,
+    "text": "POWER SUPPLY SPECIFICATIONS: AVDD supply voltage: 4.75 V to 5.25 V. DVDD supply voltage: 4.75 V to 5.25 V. IOVDD supply voltage: 1.71 V to DVDD. IAVDD supply current: 30 mA typical, 40 mA maximum. IDVDD supply current: 15 mA typical, 20 mA maximum. Power consumption at 200 kSPS: 225 mW typical. Standby mode current: 5 mA total."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 9,
+    "text": "PARALLEL INTERFACE: The ADS8598H provides a 16-bit parallel output bus (DB15–DB0) for reading conversion results. In parallel mode, the BYTE_SEL pin selects whether the upper or lower byte is output on the 8-bit bus. The parallel interface is compatible with direct processor bus connections. Parallel data valid after CONVST rising edge + conversion time + data output delay."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 10,
+    "text": "SERIAL INTERFACE: The device also supports a 4-wire SPI-compatible serial interface (SCLK, SDI, SDO, CS). Serial clock frequency: up to 30 MHz. Data is output MSB first. 18-bit data is transferred over two 16-bit SPI transactions using the BYTE_SEL control. The serial interface operates independently from the parallel interface, providing flexible system integration."
+  },
+  {
+    "page_number": 4,
+    "paragraph_number": 11,
+    "text": "CONVERSION TIMING: A low-to-high transition on CONVST initiates simultaneous sampling of all 8 channels. Conversion time: 4 µs. At 200 kSPS, throughput rate per channel: 200,000 samples per second. Data ready signal (BUSY) goes low when conversion is complete. Maximum acquisition time: 0.5 µs. Minimum conversion cycle period: 5 µs."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 12,
+    "text": "PIN DESCRIPTION (selected): AINP1–AINP8: Positive differential analog inputs. AINN1–AINN8: Negative differential analog inputs. CONVST: Simultaneous conversion start (rising edge). BUSY: Conversion in progress indicator (active high). CS: Chip select for serial interface (active low). SCLK: Serial clock. SDI: Serial data in. SDO: Serial data out. D0–D15: Parallel data output bus. BYTE_SEL: Byte select for parallel output. RANGE: Input voltage range select. AVDD: Analog supply (5 V). DVDD: Digital supply (5 V). IOVDD: I/O supply voltage. AGND/DGND: Ground references. REFIN/REFOUT: External/internal voltage reference."
+  },
+  {
+    "page_number": 5,
+    "paragraph_number": 13,
+    "text": "REFERENCE: On-chip 4.096 V precision reference. Reference temperature coefficient: 10 ppm/°C typical. Reference output current: 5 mA maximum. An external reference can be applied to REFIN. The internal reference sets the full-scale voltage: for ±10 V input range, the 4.096 V reference is scaled internally. Recommend 10 µF + 100 nF decoupling on REFOUT."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 14,
+    "text": "PACKAGE INFORMATION: SSOP-56 package. Body dimensions: 20.6 mm × 7.5 mm. Height: 2.0 mm maximum. Pitch: 0.635 mm. PCB footprint designator: SSOP-56. Lead finish: HASL or Sn-plated. RoHS compliant. Pb-free option available. Package code: IPM."
+  },
+  {
+    "page_number": 6,
+    "paragraph_number": 15,
+    "text": "ABSOLUTE MAXIMUM RATINGS: AVDD to AGND: -0.3 V to +6 V. DVDD to DGND: -0.3 V to +6 V. Analog input voltage (AINP, AINN): ±16.5 V continuous. Digital input voltage: -0.3 V to DVDD + 0.3 V. Maximum junction temperature: 150°C. Storage temperature: -65°C to +150°C. ESD rating (HBM): 2 kV."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 16,
+    "text": "APPLICATIONS INFORMATION — HVMC I/O BOARD: The ADS8598H is selected for the analog input ADC function of the HVMC I/O board. The ±10 V input range (RANGE pin tied HIGH) is used to accommodate the industrial signal range of -10 V to +10 V. Both the parallel output bus and the SPI serial interface are routed to the main processor, providing a parallel and serial interface as required. AVDD and DVDD are supplied from the 5 V rail. An anti-aliasing filter with a 10 kHz cutoff is placed on each analog input."
+  },
+  {
+    "page_number": 7,
+    "paragraph_number": 17,
+    "text": "OUTPUT CODE FORMAT: 18-bit binary two's complement output (bipolar straight binary for unipolar ranges). For ±10 V range: Code = 0x1FFFF → +9.9999 V (positive full scale). Code = 0x00000 → 0 V (mid scale). Code = 0x20000 → -10.0000 V (negative full scale). The 18-bit result is transferred as three 6-bit segments in parallel mode or as two 9-bit segments in serial mode."
+  },
+  {
+    "page_number": 8,
+    "paragraph_number": 18,
+    "text": "COMPLIANCE: RoHS compliant. Pb-free. REACH compliant. AEC-Q100 Grade 2 (-40°C to +85°C). UL recognized. Manufactured to ISO 9001:2015. MSL rating: MSL3. ESD sensitivity: Class 2 (HBM 2 kV). CE mark."
+  }
+]
