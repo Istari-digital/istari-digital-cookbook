@@ -386,6 +386,15 @@ def load_schema(search_api: str = "nexar") -> str:
 EXTRACT_SYSTEM = """\
 You are a systems engineering analyst specialising in hardware BOM generation.
 
+CRITICAL DATA PROVENANCE RULE
+------------------------------
+You MUST only reason from the requirement text provided in this prompt.
+Do NOT introduce knowledge from training data, external standards, or assumed
+context that is not explicitly present in the supplied requirements.
+Every classification must be traceable directly to text found in the input.
+If a requirement's intent is ambiguous from its text alone, classify conservatively
+and note the ambiguity in skipped_ids rather than assuming missing context.
+
 Given a list of raw Cameo/SysML requirements, classify each into:
 - hardware: requirements describing a physical part, component, or assembly
 - material: requirements referencing a material spec (AMS, MIL-SPEC, ASTM, etc.)
@@ -398,10 +407,27 @@ Rules:
 - Preserve original requirement IDs exactly."""
 
 
+_DATA_PROVENANCE_RULE = """\
+CRITICAL DATA PROVENANCE RULE
+------------------------------
+You MUST only derive part-search parameters from the requirement text supplied in
+this prompt. Do NOT invent, assume, or infer values from training data, general
+engineering knowledge, or context not present in the input.
+- Every filter value, category, or parameter must be traceable to words or numbers
+  in the provided requirement text.
+- If the requirement does not state a specific value for a field, omit that field
+  rather than guessing a typical industry value.
+- Do not add requirements that were not in the input.
+- Preserve source_req_id exactly as supplied — never fabricate IDs.
+"""
+
+
 def build_transform_prompt(schema_text: str, search_api: str = "nexar") -> str:
     if search_api == "siliconexpert":
         return f"""You are a procurement engineer converting engineering requirements into
 structured part-search specs for the SiliconExpert ProductAPI.
+
+{_DATA_PROVENANCE_RULE}
 
 OUTPUT SCHEMA
 -------------
@@ -449,6 +475,8 @@ KEY RULES
     # Default: Nexar/Octopart
     return f"""You are a procurement engineer converting engineering requirements into
 structured part-search specs conforming to the Nexar/Octopart part-search-spec schema.
+
+{_DATA_PROVENANCE_RULE}
 
 OUTPUT SCHEMA
 -------------
@@ -701,6 +729,43 @@ def run_pipeline(
             print(f"      resource_id={resource.resource_id}")
             print(f"      linked: {req_revision_id[:8]}… --[produces]--> {resource.file_revision_id[:8]}…")
 
+    # ── UUID provenance record ────────────────────────────────────────────────
+    # Every Istari UUID the agent read from or wrote to, with its role.
+    uuid_provenance: list[dict] = [
+        {
+            "uuid":  requirements_id,
+            "role":  "requirements_source",
+            "type":  "resource",
+            "label": istari.get_resource_name(requirements_id) or "requirements.json",
+        },
+        {
+            "uuid":  req_revision_id,
+            "role":  "requirements_revision",
+            "type":  "revision",
+            "label": "requirements.json (revision used for reasoning)",
+        },
+    ]
+    if model_id and model_id != "N/A":
+        uuid_provenance.insert(0, {
+            "uuid":  model_id,
+            "role":  "source_model",
+            "type":  "model",
+            "label": "Istari model containing the requirements artifact",
+        })
+    for entry in uploaded:
+        uuid_provenance.append({
+            "uuid":  entry["resource_id"],
+            "role":  "output_resource",
+            "type":  "resource",
+            "label": entry["file"],
+        })
+        uuid_provenance.append({
+            "uuid":  entry["revision_id"],
+            "role":  "output_revision",
+            "type":  "revision",
+            "label": f"{entry['file']} (revision)",
+        })
+
     summary = {
         **({"model_id": model_id} if model_id and model_id != "N/A" else {}),
         "requirements_source":   requirements_id,
@@ -715,6 +780,7 @@ def run_pipeline(
             {"req_id": r.source_req_id, "file": f"{r.source_req_id}_part_search.json"}
             for r in results
         ],
+        "uuid_provenance": uuid_provenance,
     }
     summary_fname = "part_search_summary.json"
     (local_out / summary_fname).write_text(json.dumps(summary, indent=2))
@@ -742,6 +808,19 @@ def run_pipeline(
         for i, entry in enumerate(uploaded):
             connector = "└─" if i == len(uploaded) - 1 else "├─"
             print(f"     {connector} {entry['file']}  (id={entry['resource_id']})")
+
+    # ── UUID Provenance Summary ───────────────────────────────────────────────
+    print(f"\n{'═'*60}")
+    print("UUID Provenance — Istari resources used in this run")
+    print(f"{'═'*60}")
+    col_w = 38
+    print(f"  {'UUID':<{col_w}}  {'Role':<22}  Label")
+    print(f"  {'-'*col_w}  {'-'*22}  {'-'*30}")
+    for entry in uuid_provenance:
+        uuid_str = entry["uuid"] or "N/A"
+        print(f"  {uuid_str:<{col_w}}  {entry['role']:<22}  {entry['label']}")
+    print(f"\n  All UUIDs are also recorded in: {local_out / 'part_search_summary.json'}")
+    print(f"  (field: uuid_provenance)")
 
     return results
 
