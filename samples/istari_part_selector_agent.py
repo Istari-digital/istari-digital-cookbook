@@ -7,7 +7,7 @@ outputs OrCAD Capture CIS XML files ready for import into Cadence.
 
 Pipeline (4 stages):
   1. Fetch requirements.json from Istari (by model ID or resource ID)
-  2. Fetch SE datasheet JSON artifacts from Istari (by model ID or resource IDs)
+  2. Discover SE datasheet JSON artifacts on the same Istari model automatically
   3. LLM selects best part(s) satisfying the requirements
   4. Generate OrCAD CIS XML files + OLB symbol library JSON, upload to Istari
 
@@ -22,19 +22,17 @@ Credentials (flags > .env > environment variables):
   --api-key       / ANTHROPIC_API_KEY | OPENAI_API_KEY | GENESIS_API_KEY
 
 Usage:
-  # Requirements + datasheets both live on the same Istari model:
+  # Requirements + datasheets on the same model — fully automatic discovery:
   python istari_part_selector_agent.py \\
-      --model-id <UUID> --datasheets-model-id <UUID> --provider anthropic
+      --model-id <UUID> --provider anthropic
 
-  # Requirements by resource ID, datasheets by explicit resource IDs:
+  # Pin a specific requirements resource, still auto-discover datasheets on the model:
   python istari_part_selector_agent.py \\
-      --requirements-id <UUID> \\
-      --datasheets-resource-ids <UUID1> <UUID2> \\
-      --provider openai --model gpt-4o
+      --model-id <UUID> --requirements-id <UUID> --provider openai --model gpt-4o
 
   # Dry run (write XML locally only, no Istari upload):
   python istari_part_selector_agent.py \\
-      --model-id <UUID> --datasheets-model-id <UUID> --dry-run
+      --model-id <UUID> --dry-run
 """
 
 from __future__ import annotations
@@ -919,19 +917,26 @@ def run_pipeline(
     selection_agent: Agent,
     istari: IstariCapability,
     model_name: str,
+    model_id: str,
     dry_run: bool = False,
-    requirements_model_id: str | None = None,
     requirements_id: str | None = None,
-    datasheets_model_id: str | None = None,
-    datasheets_resource_ids: list[str] | None = None,
 ) -> PartSelectionOutput:
+    """
+    Run the part selection pipeline.
+
+    Args:
+        model_id: Istari model ID — scanned for both requirements and datasheet artifacts.
+        requirements_id: Optional specific resource ID for requirements. If omitted,
+            the agent auto-discovers the requirements.json artifact on model_id.
+    """
 
     # ── Step 1: Fetch requirements ────────────────────────────────────────────
     if requirements_id:
-        print(f"\n[1/4] Downloading requirements (resource_id={requirements_id}) ...")
+        print(f"\n[1/4] Using pinned requirements resource (resource_id={requirements_id}) ...")
+        print(f"      Datasheet artifacts will be discovered from model {model_id}")
     else:
-        print(f"\n[1/4] Locating requirements for model {requirements_model_id} ...")
-        requirements_id = istari.find_requirements_resource_id(requirements_model_id)
+        print(f"\n[1/4] Locating requirements artifact on model {model_id} ...")
+        requirements_id = istari.find_requirements_resource_id(model_id)
 
     req_revision_id = istari.get_revision_id(requirements_id)
     all_reqs        = istari.fetch_requirements(requirements_id)
@@ -943,28 +948,33 @@ def run_pipeline(
         print("No actionable requirements — nothing to select.")
         return PartSelectionOutput(selected_parts=[], unmatched_req_ids=[])
 
-    # ── Step 2: Fetch SE datasheets ───────────────────────────────────────────
-    print(f"\n[2/4] Loading Silicon Expert datasheets from Istari ...")
+    # ── Step 2: Discover SE datasheets on the same model ─────────────────────
+    print(f"\n[2/4] Discovering Silicon Expert datasheet artifacts on model {model_id} ...")
 
-    # Collect the resource IDs actually fetched (for UUID provenance)
-    datasheet_resource_ids_used: list[tuple[str, str]] = []  # [(resource_id, label)]
-    if datasheets_model_id:
-        found = istari.find_datasheet_resource_ids(datasheets_model_id)
-        datasheet_resource_ids_used.extend(found)
-    for rid in (datasheets_resource_ids or []):
-        label = istari.get_resource_name(rid) or rid
-        datasheet_resource_ids_used.append((rid, label))
+    found = istari.find_datasheet_resource_ids(model_id)
+    if not found:
+        print(f"ERROR: no SE datasheet JSON artifacts found on model {model_id}.")
+        print(f"       Expected artifact filenames containing one of: {DATASHEET_PATTERNS}")
+        print(f"       Upload your SE datasheet JSON files as artifacts on this model and retry.")
+        sys.exit(1)
 
+    print(f"      Found {len(found)} datasheet artifact(s):")
+    for fname, rid in found:
+        print(f"      '{fname}'  (resource_id={rid})")
+
+    # [(resource_id, label)] — used later for UUID provenance
+    datasheet_resource_ids_used: list[tuple[str, str]] = list(found)
+
+    # Load directly from the already-discovered resource IDs (no second model scan)
     datasheets = load_datasheets_from_istari(
         istari,
-        model_id=datasheets_model_id,
-        resource_ids=datasheets_resource_ids or [],
+        model_id=None,
+        resource_ids=[rid for rid, _ in found],
     )
     print(f"      {len(datasheets)} part datasheet(s) loaded")
 
     if not datasheets:
-        print("ERROR: no SE datasheet data loaded. "
-              "Use --datasheets-model-id or --datasheets-resource-ids.")
+        print("ERROR: datasheet artifacts were found but could not be parsed.")
         sys.exit(1)
 
     # ── Step 3: LLM selection ─────────────────────────────────────────────────
@@ -1128,25 +1138,24 @@ def run_pipeline(
         )
         tmp.unlink(missing_ok=True)
         istari.link_resources(req_revision_id, resource.file_revision_id)
+        uploaded.append({
+            "mpn":         "bundle",
+            "file":        bundle_fname,
+            "resource_id": resource.resource_id,
+            "revision_id": resource.file_revision_id,
+            "req_ids":     [],
+        })
         print(f"  ✓ {bundle_fname}  →  resource_id={resource.resource_id}")
 
     # ── UUID provenance record ────────────────────────────────────────────────
     uuid_provenance: list[dict] = []
 
-    if requirements_model_id:
-        uuid_provenance.append({
-            "uuid":  requirements_model_id,
-            "role":  "source_model",
-            "type":  "model",
-            "label": "Istari model containing the requirements artifact",
-        })
-    if datasheets_model_id:
-        uuid_provenance.append({
-            "uuid":  datasheets_model_id,
-            "role":  "datasheets_model",
-            "type":  "model",
-            "label": "Istari model scanned for SE datasheet artifacts",
-        })
+    uuid_provenance.append({
+        "uuid":  model_id,
+        "role":  "source_model",
+        "type":  "model",
+        "label": "Istari model containing requirements and datasheet artifacts",
+    })
 
     uuid_provenance.append({
         "uuid":  requirements_id,
@@ -1183,31 +1192,57 @@ def run_pipeline(
             "label": f"{entry['file']} (revision)",
         })
 
-    # Summary JSON
-    summary = {
-        "requirements_source":   requirements_id,
-        "requirements_revision": req_revision_id,
-        "model":                 model_name,
-        "total_requirements":    len(actionable),
-        "parts_selected":        len(result.selected_parts),
-        "unmatched_req_ids":     result.unmatched_req_ids,
-        "notes":                 result.notes,
-        "outputs": uploaded if not dry_run else [
-            {"mpn": p.mpn, "file": f"{p.part_name}.json"}
-            for p in result.selected_parts
-        ],
-        "uuid_provenance": uuid_provenance,
-    }
+    # Summary JSON — written first with full provenance, then uploaded last
+    # so the summary's own resource_id can be appended to provenance and the
+    # local file updated before the run completes.
     summary_fname = "part_selection_summary.json"
-    (local_out / summary_fname).write_text(json.dumps(summary, indent=2))
+
+    def _build_summary(extra_provenance: list[dict] | None = None) -> dict:
+        return {
+            "requirements_source":   requirements_id,
+            "requirements_revision": req_revision_id,
+            "model":                 model_name,
+            "total_requirements":    len(actionable),
+            "parts_selected":        len(result.selected_parts),
+            "unmatched_req_ids":     result.unmatched_req_ids,
+            "notes":                 result.notes,
+            "outputs": uploaded if not dry_run else [
+                {"mpn": p.mpn, "file": f"{p.part_name}.json"}
+                for p in result.selected_parts
+            ],
+            "uuid_provenance": uuid_provenance + (extra_provenance or []),
+        }
+
+    # Write preliminary summary (without its own resource_id — not known yet)
+    (local_out / summary_fname).write_text(json.dumps(_build_summary(), indent=2))
 
     if not dry_run:
         tmp = Path(tempfile.gettempdir()) / summary_fname
-        tmp.write_text(json.dumps(summary, indent=2))
+        tmp.write_text(json.dumps(_build_summary(), indent=2))
         resource = istari.upload_resource(tmp, summary_fname, "Part Selector Agent run summary")
         tmp.unlink(missing_ok=True)
         istari.link_resources(req_revision_id, resource.file_revision_id)
         print(f"  ✓ {summary_fname}  →  resource_id={resource.resource_id}")
+
+        # Now that we know the summary's own IDs, add them to provenance and
+        # rewrite the local file so it is self-documenting.
+        summary_provenance = [
+            {
+                "uuid":  resource.resource_id,
+                "role":  "summary_resource",
+                "type":  "resource",
+                "label": summary_fname,
+            },
+            {
+                "uuid":  resource.file_revision_id,
+                "role":  "summary_revision",
+                "type":  "revision",
+                "label": f"{summary_fname} (revision)",
+            },
+        ]
+        uuid_provenance.extend(summary_provenance)
+        final_summary = _build_summary()  # uuid_provenance now includes summary IDs
+        (local_out / summary_fname).write_text(json.dumps(final_summary, indent=2))
 
     # Print summary
     print(f"\n{'─'*60}")
@@ -1223,9 +1258,14 @@ def run_pipeline(
         src_name = istari.get_resource_name(requirements_id) or requirements_id
         print(f"\n  {src_name}  (id={requirements_id})")
         print(f"  └─ produces:")
-        for i, entry in enumerate(uploaded):
-            connector = "└─" if i == len(uploaded) - 1 else "├─"
-            print(f"     {connector} {entry['file']}  (id={entry['resource_id']})")
+        # Include all uploaded + summary in thread view
+        thread_entries = [
+            e for e in uuid_provenance
+            if e["role"] in ("output_resource", "summary_resource")
+        ]
+        for i, entry in enumerate(thread_entries):
+            connector = "└─" if i == len(thread_entries) - 1 else "├─"
+            print(f"     {connector} {entry['label']}  (id={entry['uuid']})")
 
     # ── UUID Provenance Summary ───────────────────────────────────────────────
     print(f"\n{'═'*60}")
@@ -1254,20 +1294,19 @@ def parse_args() -> argparse.Namespace:
         epilog=__doc__,
     )
 
-    # Requirements source
-    req = p.add_argument_group("Requirements source (choose one)")
-    req_src = req.add_mutually_exclusive_group(required=True)
-    req_src.add_argument("--model-id", metavar="UUID",
-                         help="Istari model ID — agent finds the requirements.json artifact automatically")
-    req_src.add_argument("--requirements-id", metavar="UUID",
-                         help="Istari resource ID of the requirements.json")
-
-    # Datasheets source
-    ds = p.add_argument_group("SE datasheet source (at least one required)")
-    ds.add_argument("--datasheets-model-id", metavar="UUID", default=None,
-                    help="Istari model ID to scan for SE datasheet JSON artifacts")
-    ds.add_argument("--datasheets-resource-ids", metavar="UUID", nargs="+", default=None,
-                    help="One or more Istari resource IDs for SE datasheet JSON files")
+    # Model / requirements source
+    src = p.add_argument_group("Istari model (required)")
+    src.add_argument("--model-id", metavar="UUID", required=True,
+                     help=(
+                         "Istari model ID. The agent scans this model for both the "
+                         "requirements.json artifact and all SE datasheet JSON artifacts automatically."
+                     ))
+    src.add_argument("--requirements-id", metavar="UUID", default=None,
+                     help=(
+                         "Optional: pin a specific requirements resource ID instead of "
+                         "auto-discovering it from --model-id. Datasheets are still "
+                         "discovered from --model-id automatically."
+                     ))
 
     # LLM
     llm = p.add_argument_group("LLM provider")
@@ -1310,10 +1349,6 @@ def main() -> None:
     args = parse_args()
     _load_env(args.env_file)
 
-    if not args.datasheets_model_id and not args.datasheets_resource_ids:
-        print("ERROR: must supply --datasheets-model-id and/or --datasheets-resource-ids", file=sys.stderr)
-        sys.exit(1)
-
     env_key_name = {
         "anthropic": "ANTHROPIC_API_KEY",
         "openai":    "OPENAI_API_KEY",
@@ -1343,25 +1378,21 @@ def main() -> None:
     print(f"  Provider:    {args.provider}")
     print(f"  LLM model:   {model_name}")
     print(f"  Istari:      {istari.registry_url}")
-    if args.model_id:
-        print(f"  Requirements model: {args.model_id}")
+    print(f"  Model:       {args.model_id}")
+    if args.requirements_id:
+        print(f"  Requirements ID (pinned): {args.requirements_id}")
     else:
-        print(f"  Requirements ID:    {args.requirements_id}")
-    if args.datasheets_model_id:
-        print(f"  Datasheets model:   {args.datasheets_model_id}")
-    if args.datasheets_resource_ids:
-        print(f"  Datasheet IDs:      {args.datasheets_resource_ids}")
+        print(f"  Requirements: auto-discovered from model")
+    print(f"  Datasheets:  auto-discovered from model")
     print(f"  Dry run:     {args.dry_run}")
 
     run_pipeline(
         selection_agent=agent,
         istari=istari,
         model_name=model_name,
+        model_id=args.model_id,
         dry_run=args.dry_run,
-        requirements_model_id=args.model_id,
         requirements_id=args.requirements_id,
-        datasheets_model_id=args.datasheets_model_id,
-        datasheets_resource_ids=args.datasheets_resource_ids,
     )
 
 
