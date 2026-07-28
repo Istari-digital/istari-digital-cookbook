@@ -57,7 +57,6 @@ import json
 import os
 import sys
 import time
-from istari_digital_client.v2.models.os import OS
 from pathlib import Path
 
 from istari_digital_client import Client, Configuration, FunctionAuthType, NewSource
@@ -117,6 +116,14 @@ def parse_args():
     tag_src.add_argument("--tags-file", metavar="FILE", help="JSON file containing the updates array")
     tag_src.add_argument("--element-id", metavar="ID", help="Single element ID to tag (use with --tag)")
     tag_src.add_argument("--element-name", metavar="NAME", help="Single element name to tag (use with --tag)")
+    tag_src.add_argument(
+        "--part-search-summary",
+        metavar="FILE",
+        nargs="?",
+        const="part_search_summary.json",
+        help="Path to part_search_summary.json (default: part_search_summary.json in current dir). "
+             "Tags each requirement with PartSearchStatus=Completed/Skipped and PartSearchResourceId.",
+    )
     tags.add_argument(
         "--tag",
         metavar="KEY=VALUE",
@@ -164,6 +171,10 @@ def validate_args(args):
         if not args.local_path.lower().endswith(".mdzip"):
             print(f"Warning: expected a .mdzip file, got: {args.local_path}")
 
+    if args.part_search_summary is not None:
+        if not os.path.isfile(args.part_search_summary):
+            sys.exit(f"Error: part search summary file not found: {args.part_search_summary}")
+
 
 def build_client(args) -> Client:
     registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL")
@@ -175,7 +186,50 @@ def build_client(args) -> Client:
     return Client(Configuration(registry_url=registry_url, registry_auth_token=registry_auth_token))
 
 
+def build_updates_from_part_search(summary_path: str, model_id: str | None, replace_existing: bool) -> list[dict]:
+    with open(summary_path) as f:
+        summary = json.load(f)
+
+    summary_model_id = summary.get("model_id")
+    if model_id and summary_model_id and summary_model_id != model_id:
+        print(f"  Warning: part_search_summary model_id ({summary_model_id}) does not match --model-id ({model_id})")
+
+    updates = []
+
+    for output in summary.get("outputs", []):
+        req_id = output.get("req_id")
+        resource_id = output.get("resource_id", "")
+        revision_id = output.get("revision_id", "")
+        if not req_id:
+            continue
+        updates.append({
+            "element_name": req_id,
+            "replace_existing": replace_existing,
+            "tags": {
+                "PartSearchStatus": "Completed",
+                "PartSearchResourceId": resource_id,
+                "PartSearchRevisionId": revision_id,
+            },
+        })
+
+    for req_id in summary.get("skipped_ids", []):
+        updates.append({
+            "element_name": str(req_id),
+            "replace_existing": replace_existing,
+            "tags": {
+                "PartSearchStatus": "Skipped",
+            },
+        })
+
+    print(f"  Part search summary: {len(summary.get('outputs', []))} completed, "
+          f"{len(summary.get('skipped_ids', []))} skipped → {len(updates)} element update(s)")
+    return updates
+
+
 def build_updates(args) -> list[dict]:
+    if args.part_search_summary is not None:
+        return build_updates_from_part_search(args.part_search_summary, args.model_id, args.replace_existing)
+
     if args.tags_file:
         with open(args.tags_file) as f:
             updates = json.load(f)
@@ -254,8 +308,8 @@ def submit_job(client: Client, model_id: str, updates: list[dict], sources: list
         model_id=model_id,
         function=function,
         tool_name="dassault_cameo",
-        tool_version=tool_version or "2024x Refresh2",
-        operating_system=OS.WINDOWS_11,
+        tool_version=tool_version or None,
+        operating_system=operating_system or None,
         parameters={"updates": updates},
         sources=sources if sources else None,
         assigned_agent_id=assigned_agent_id or None,
