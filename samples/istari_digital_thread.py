@@ -126,50 +126,37 @@ def collect_thread(client, model_id, max_depth):
         })
         add_edge(parent_id, rev_node_id, "has_revision")
 
-        # Follow sources (inputs to this revision)
+        # Record sources (inputs to this revision) — no remote fetch to avoid permission issues
         for source in (safe_get(rev, "sources") or []):
             src_rev_id = safe_get(source, "revision_id")
             rel = safe_get(source, "relationship_identifier") or "source"
             if src_rev_id:
                 src_node_id = f"rev:{src_rev_id}"
-                add_node(src_node_id, "revision", src_rev_id[:8], {
+                resource_type = safe_get(source, "resource_type") or ""
+                resource_id = safe_get(source, "resource_id") or ""
+                label = f"{resource_type}:{resource_id[:8]}" if resource_id else src_rev_id[:8]
+                add_node(src_node_id, "revision", label, {
                     "revision_id": src_rev_id,
-                    "resource_type": safe_get(source, "resource_type"),
-                    "resource_id": safe_get(source, "resource_id"),
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
                 })
                 add_edge(src_node_id, rev_node_id, rel)
-                # Try to resolve and walk the source revision
-                try:
-                    src_rev = client.get_revision(revision_id=src_rev_id)
-                    if src_rev and src_rev.id not in visited_revisions:
-                        nodes[src_node_id]["label"] = revision_label(src_rev)
-                        walk_revision(src_rev, src_node_id, "revision", depth + 1)
-                except (ForbiddenException, NotFoundException):
-                    nodes[src_node_id]["meta"]["error"] = "permission_denied"
-                except Exception as e:
-                    nodes[src_node_id]["meta"]["error"] = str(e)[:80]
 
-        # Follow products (outputs derived from this revision)
+        # Record products (outputs derived from this revision) — no remote fetch
         for product in (safe_get(rev, "products") or []):
             prod_rev_id = safe_get(product, "revision_id")
             rel = safe_get(product, "relationship_identifier") or "product"
             if prod_rev_id:
                 prod_node_id = f"rev:{prod_rev_id}"
-                add_node(prod_node_id, "revision", prod_rev_id[:8], {
+                resource_type = safe_get(product, "resource_type") or ""
+                resource_id = safe_get(product, "resource_id") or ""
+                label = f"{resource_type}:{resource_id[:8]}" if resource_id else prod_rev_id[:8]
+                add_node(prod_node_id, "revision", label, {
                     "revision_id": prod_rev_id,
-                    "resource_type": safe_get(product, "resource_type"),
-                    "resource_id": safe_get(product, "resource_id"),
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
                 })
                 add_edge(rev_node_id, prod_node_id, rel)
-                try:
-                    prod_rev = client.get_revision(revision_id=prod_rev_id)
-                    if prod_rev and prod_rev.id not in visited_revisions:
-                        nodes[prod_node_id]["label"] = revision_label(prod_rev)
-                        walk_revision(prod_rev, prod_node_id, "revision", depth + 1)
-                except (ForbiddenException, NotFoundException):
-                    nodes[prod_node_id]["meta"]["error"] = "permission_denied"
-                except Exception as e:
-                    nodes[prod_node_id]["meta"]["error"] = str(e)[:80]
 
     # --- Root model ---
     print(f"Fetching model {model_id}...")
