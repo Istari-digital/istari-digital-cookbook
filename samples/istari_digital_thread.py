@@ -384,6 +384,8 @@ def render_tree(thread):
             if meta.get("function"):
                 detail_lines.append(f"function:  {meta['function']}")
         elif node["type"] == "artifact":
+            if meta.get("full_name"):
+                detail_lines.append(f"name:      {meta['full_name']}")
             if meta.get("created"):
                 detail_lines.append(f"created:   {meta['created']}")
             if meta.get("last_updated"):
