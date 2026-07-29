@@ -103,6 +103,10 @@ def collect_thread(client, model_id, max_depth):
     def walk_revision(rev, parent_id, parent_type, depth):
         if depth > max_depth or rev.id in visited_revisions:
             return
+        try:
+            _ = rev.id
+        except Exception:
+            return
         visited_revisions.add(rev.id)
 
         rev_label = revision_label(rev)
@@ -134,8 +138,8 @@ def collect_thread(client, model_id, max_depth):
                     if src_rev and src_rev.id not in visited_revisions:
                         nodes[src_node_id]["label"] = revision_label(src_rev)
                         walk_revision(src_rev, src_node_id, "revision", depth + 1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    nodes[src_node_id]["meta"]["error"] = "permission_denied" if "403" in str(e) else str(e)[:80]
 
         # Follow products (outputs derived from this revision)
         for product in (safe_get(rev, "products") or []):
@@ -154,8 +158,8 @@ def collect_thread(client, model_id, max_depth):
                     if prod_rev and prod_rev.id not in visited_revisions:
                         nodes[prod_node_id]["label"] = revision_label(prod_rev)
                         walk_revision(prod_rev, prod_node_id, "revision", depth + 1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    nodes[prod_node_id]["meta"]["error"] = "permission_denied" if "403" in str(e) else str(e)[:80]
 
     # --- Root model ---
     print(f"Fetching model {model_id}...")
