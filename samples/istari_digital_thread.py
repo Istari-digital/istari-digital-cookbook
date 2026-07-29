@@ -196,8 +196,49 @@ def collect_thread(client, model_id, max_depth):
             art_name = safe_get(latest, "display_name") or safe_get(latest, "name") or safe_get(latest, "stem")
         art_name = art_name or art_id[:8]
 
+        # Collect full details from all revisions
+        rev_names = []
+        created_dates = []
+        extensions = []
+        sizes = []
+        version_names = []
+        for rev in art_revs:
+            n = safe_get(rev, "display_name") or safe_get(rev, "name") or safe_get(rev, "stem") or ""
+            if n and n not in rev_names:
+                rev_names.append(n)
+            ext = safe_get(rev, "extension") or safe_get(rev, "suffix") or ""
+            if ext and ext not in extensions:
+                extensions.append(ext.lstrip("."))
+            sz = safe_get(rev, "size")
+            if sz:
+                sizes.append(sz)
+            dt = safe_get(rev, "created")
+            if dt:
+                created_dates.append(dt)
+            vn = safe_get(rev, "version_name")
+            if vn:
+                version_names.append(vn)
+
+        earliest = fmt_date(min(created_dates)) if created_dates else ""
+        latest_date = fmt_date(max(created_dates)) if created_dates else ""
+        full_name = rev_names[0] if rev_names else art_name
+        if extensions:
+            display_name = f"{full_name}.{extensions[0]}" if not full_name.endswith(tuple(f'.{e}' for e in extensions)) else full_name
+        else:
+            display_name = full_name
+
         art_node_id = f"artifact:{art_id}"
-        add_node(art_node_id, "artifact", art_name, {"artifact_id": art_id, "model_id": model_id})
+        add_node(art_node_id, "artifact", display_name, {
+            "artifact_id": art_id,
+            "model_id": model_id,
+            "full_name": display_name,
+            "extension": extensions[0] if extensions else "",
+            "revision_count": len(art_revs),
+            "created": earliest,
+            "last_updated": latest_date if latest_date != earliest else "",
+            "latest_size": max(sizes) if sizes else None,
+            "version_names": version_names,
+        })
         add_edge(model_node_id, art_node_id, "has_artifact")
 
         for rev in art_revs:
@@ -335,18 +376,48 @@ def render_tree(thread):
 
         # Show key metadata inline
         extras = []
+        detail_lines = []
+
         if node["type"] == "job":
             if meta.get("status"):
                 extras.append(meta["status"])
+            if meta.get("function"):
+                detail_lines.append(f"function:  {meta['function']}")
+        elif node["type"] == "artifact":
+            if meta.get("created"):
+                detail_lines.append(f"created:   {meta['created']}")
+            if meta.get("last_updated"):
+                detail_lines.append(f"updated:   {meta['last_updated']}")
+            if meta.get("revision_count"):
+                detail_lines.append(f"revisions: {meta['revision_count']}")
+            if meta.get("latest_size"):
+                sz = meta["latest_size"]
+                if sz >= 1_048_576:
+                    detail_lines.append(f"size:      {sz / 1_048_576:.1f} MB")
+                elif sz >= 1024:
+                    detail_lines.append(f"size:      {sz / 1024:.1f} KB")
+                else:
+                    detail_lines.append(f"size:      {sz} B")
+            if meta.get("artifact_id"):
+                detail_lines.append(f"id:        {meta['artifact_id']}")
         elif node["type"] == "revision":
             if meta.get("extension"):
                 extras.append(meta["extension"])
+            if meta.get("created"):
+                extras.append(meta["created"])
             if meta.get("size"):
-                size = meta["size"]
-                extras.append(f"{size:,} bytes" if size > 1024 else f"{size} B")
-        extra_str = f"  ({', '.join(extras)})" if extras else ""
+                sz = meta["size"]
+                extras.append(f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B")
+        elif node["type"] == "model":
+            if meta.get("model_id"):
+                detail_lines.append(f"id:        {meta['model_id']}")
 
+        extra_str = f"  ({', '.join(extras)})" if extras else ""
         print(f"{prefix}{connector}{type_tag} {label}{extra_str}")
+
+        detail_prefix = prefix + ("    " if is_last else "│   ")
+        for line in detail_lines:
+            print(f"{detail_prefix}    {line}")
 
         child_list = children.get(node_id, [])
         child_prefix = prefix + ("    " if is_last else "│   ")
