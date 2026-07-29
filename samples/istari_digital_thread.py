@@ -1,5 +1,5 @@
 """
-Trace the digital thread for a model in the Istari platform.
+Trace the digital thread for a model or revision in the Istari platform.
 
 Walks the model's artifacts and jobs, following source/product relationships
 on file revisions to build a connected graph, then prints it as a tree.
@@ -10,6 +10,7 @@ Configuration via environment variables or CLI flags:
 
 Usage:
   python istari_digital_thread.py --model-id <id>
+  python istari_digital_thread.py --revision-id <id>
   python istari_digital_thread.py --model-id <id> --output thread.json
   python istari_digital_thread.py --model-id <id> --format dot > thread.dot
 """
@@ -33,7 +34,9 @@ def parse_args():
         description="Trace the Istari digital thread for a model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--model-id", required=True, metavar="ID", help="Istari model ID to trace")
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--model-id", metavar="ID", help="Istari model ID to trace")
+    scope.add_argument("--revision-id", metavar="ID", help="Trace a single file revision and its source/product links")
     parser.add_argument("--url", default=None, help="Istari registry URL (overrides ISTARI_REGISTRY_URL)")
     parser.add_argument("--token", default=None, help="Istari auth token (overrides ISTARI_REGISTRY_AUTH_TOKEN)")
     parser.add_argument(
@@ -244,6 +247,69 @@ def collect_thread(client, model_id, max_depth):
     return {"model_id": model_id, "nodes": nodes, "edges": edges}
 
 
+def collect_thread_revision(client, revision_id):
+    """Trace a single revision and its source/product relationships."""
+    nodes = {}
+    edges = []
+
+    def add_node(node_id, node_type, label, meta=None):
+        if node_id not in nodes:
+            nodes[node_id] = {"id": node_id, "type": node_type, "label": label, "meta": meta or {}}
+
+    def add_edge(from_id, to_id, relationship):
+        edge = {"from": from_id, "to": to_id, "relationship": relationship}
+        if edge not in edges:
+            edges.append(edge)
+
+    print(f"Fetching revision {revision_id}...")
+    try:
+        rev = client.get_revision(revision_id=revision_id)
+    except Exception as e:
+        sys.exit(f"Error fetching revision: {e}")
+
+    rev_label = revision_label(rev)
+    rev_node_id = f"rev:{rev.id}"
+    add_node(rev_node_id, "revision", rev_label, {
+        "revision_id": rev.id,
+        "file_id": safe_get(rev, "file_id"),
+        "extension": safe_get(rev, "extension"),
+        "size": safe_get(rev, "size"),
+        "created": fmt_date(safe_get(rev, "created")),
+    })
+
+    for source in (safe_get(rev, "sources") or []):
+        src_rev_id = safe_get(source, "revision_id")
+        rel = safe_get(source, "relationship_identifier") or "source"
+        if src_rev_id:
+            resource_type = safe_get(source, "resource_type") or ""
+            resource_id = safe_get(source, "resource_id") or ""
+            label = f"{resource_type}:{resource_id[:8]}" if resource_id else src_rev_id[:8]
+            src_node_id = f"rev:{src_rev_id}"
+            add_node(src_node_id, "revision", label, {
+                "revision_id": src_rev_id,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+            })
+            add_edge(src_node_id, rev_node_id, rel)
+
+    for product in (safe_get(rev, "products") or []):
+        prod_rev_id = safe_get(product, "revision_id")
+        rel = safe_get(product, "relationship_identifier") or "product"
+        if prod_rev_id:
+            resource_type = safe_get(product, "resource_type") or ""
+            resource_id = safe_get(product, "resource_id") or ""
+            label = f"{resource_type}:{resource_id[:8]}" if resource_id else prod_rev_id[:8]
+            prod_node_id = f"rev:{prod_rev_id}"
+            add_node(prod_node_id, "revision", label, {
+                "revision_id": prod_rev_id,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+            })
+            add_edge(rev_node_id, prod_node_id, rel)
+
+    return {"revision_id": revision_id, "nodes": nodes, "edges": edges}
+
+
 def render_tree(thread):
     nodes = thread["nodes"]
     edges = thread["edges"]
@@ -329,7 +395,10 @@ def main():
     if compat:
         print(f"Connected to Istari platform  version={compat.server_version}")
 
-    thread = collect_thread(client, args.model_id, args.depth)
+    if args.revision_id:
+        thread = collect_thread_revision(client, args.revision_id)
+    else:
+        thread = collect_thread(client, args.model_id, args.depth)
 
     node_count = len(thread["nodes"])
     edge_count = len(thread["edges"])
