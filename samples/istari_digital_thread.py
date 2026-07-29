@@ -137,7 +137,7 @@ def collect_thread(client, model_id, max_depth):
                 src_node_id = f"rev:{src_rev_id}"
                 resource_type = safe_get(source, "resource_type") or ""
                 resource_id = safe_get(source, "resource_id") or ""
-                label = f"{resource_type}:{resource_id[:8]}" if resource_id else src_rev_id[:8]
+                label = f"{resource_type}:{resource_id}" if resource_id else src_rev_id
                 add_node(src_node_id, "revision", label, {
                     "revision_id": src_rev_id,
                     "resource_type": resource_type,
@@ -153,7 +153,7 @@ def collect_thread(client, model_id, max_depth):
                 prod_node_id = f"rev:{prod_rev_id}"
                 resource_type = safe_get(product, "resource_type") or ""
                 resource_id = safe_get(product, "resource_id") or ""
-                label = f"{resource_type}:{resource_id[:8]}" if resource_id else prod_rev_id[:8]
+                label = f"{resource_type}:{resource_id}" if resource_id else prod_rev_id
                 add_node(prod_node_id, "revision", label, {
                     "revision_id": prod_rev_id,
                     "resource_type": resource_type,
@@ -175,7 +175,7 @@ def collect_thread(client, model_id, max_depth):
     if file_revs:
         latest = file_revs[-1]
         model_name = safe_get(latest, "display_name") or safe_get(latest, "name") or safe_get(latest, "stem")
-    model_name = model_name or model_id[:8]
+    model_name = model_name or model_id
 
     model_node_id = f"model:{model_id}"
     add_node(model_node_id, "model", model_name, {"model_id": model_id})
@@ -190,11 +190,17 @@ def collect_thread(client, model_id, max_depth):
     for artifact in artifacts:
         art_id = artifact.id
         art_revs = safe_get(artifact, "file", "revisions") or []
-        art_name = None
-        if art_revs:
+        # Try artifact-level name fields first, then revision-level
+        art_name = (
+            safe_get(artifact, "display_name")
+            or safe_get(artifact, "name")
+            or safe_get(artifact, "file", "display_name")
+            or safe_get(artifact, "file", "name")
+        )
+        if not art_name and art_revs:
             latest = art_revs[-1]
             art_name = safe_get(latest, "display_name") or safe_get(latest, "name") or safe_get(latest, "stem")
-        art_name = art_name or art_id[:8]
+        art_name = art_name or art_id
 
         # Collect full details from all revisions
         rev_names = []
@@ -324,7 +330,7 @@ def collect_thread_revision(client, revision_id):
         if src_rev_id:
             resource_type = safe_get(source, "resource_type") or ""
             resource_id = safe_get(source, "resource_id") or ""
-            label = f"{resource_type}:{resource_id[:8]}" if resource_id else src_rev_id[:8]
+            label = f"{resource_type}:{resource_id}" if resource_id else src_rev_id
             src_node_id = f"rev:{src_rev_id}"
             add_node(src_node_id, "revision", label, {
                 "revision_id": src_rev_id,
@@ -339,7 +345,7 @@ def collect_thread_revision(client, revision_id):
         if prod_rev_id:
             resource_type = safe_get(product, "resource_type") or ""
             resource_id = safe_get(product, "resource_id") or ""
-            label = f"{resource_type}:{resource_id[:8]}" if resource_id else prod_rev_id[:8]
+            label = f"{resource_type}:{resource_id}" if resource_id else prod_rev_id
             prod_node_id = f"rev:{prod_rev_id}"
             add_node(prod_node_id, "revision", label, {
                 "revision_id": prod_rev_id,
@@ -384,8 +390,9 @@ def render_tree(thread):
             if meta.get("function"):
                 detail_lines.append(f"function:  {meta['function']}")
         elif node["type"] == "artifact":
-            if meta.get("full_name"):
-                detail_lines.append(f"name:      {meta['full_name']}")
+            detail_lines.append(f"name:      {node['label']}")
+            if meta.get("artifact_id"):
+                detail_lines.append(f"id:        {meta['artifact_id']}")
             if meta.get("created"):
                 detail_lines.append(f"created:   {meta['created']}")
             if meta.get("last_updated"):
@@ -400,8 +407,6 @@ def render_tree(thread):
                     detail_lines.append(f"size:      {sz / 1024:.1f} KB")
                 else:
                     detail_lines.append(f"size:      {sz} B")
-            if meta.get("artifact_id"):
-                detail_lines.append(f"id:        {meta['artifact_id']}")
         elif node["type"] == "revision":
             if meta.get("extension"):
                 extras.append(meta["extension"])
