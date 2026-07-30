@@ -69,6 +69,7 @@ def parse_args():
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--model-id", metavar="ID", help="Istari model ID to trace")
     scope.add_argument("--system-id", metavar="ID", help="Istari system ID — traces all resources in the system baseline")
+    scope.add_argument("--list-systems", action="store_true", help="List all systems and their IDs, then exit")
 
     auth = parser.add_argument_group("Auth (first match wins: flag > env var > config file)")
     auth.add_argument("--url", default=None, help="Istari registry URL")
@@ -797,6 +798,40 @@ def render_dot(lineage):
     return "\n".join(lines)
 
 
+def list_systems(client):
+    print("Fetching systems...")
+    all_systems = []
+    page = 1
+    while True:
+        try:
+            result = client.list_systems(page=page, size=100)
+        except Exception as e:
+            sys.exit(f"Error listing systems: {e}")
+        items = (
+            result.items if hasattr(result, "items") and result.items is not None else
+            result.content if hasattr(result, "content") and result.content is not None else []
+        )
+        if not items:
+            break
+        all_systems.extend(items)
+        if len(items) < 100:
+            break
+        page += 1
+
+    if not all_systems:
+        print("No systems found.")
+        return
+
+    print(f"\nFound {len(all_systems)} system(s):\n")
+    print(f"  {'NAME':<40} {'STATUS':<10} ID")
+    print(f"  {'-'*40} {'-'*10} {'-'*36}")
+    for s in sorted(all_systems, key=lambda x: (getattr(x, "name", "") or "").lower()):
+        name = getattr(s, "name", "") or "—"
+        status = getattr(s, "archive_status", "") or "active"
+        sid = getattr(s, "id", "?")
+        print(f"  {name:<40} {status:<10} {sid}")
+
+
 def main():
     args = parse_args()
     client = build_client(args)
@@ -804,6 +839,10 @@ def main():
     compat = client.check_compatibility()
     if compat:
         print(f"Connected to Istari platform  version={compat.server_version}")
+
+    if args.list_systems:
+        list_systems(client)
+        return
 
     if args.system_id:
         lineage = collect_lineage_system(client, args.system_id, args.collapse_revisions, args.max_revisions)
