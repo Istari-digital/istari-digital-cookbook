@@ -80,8 +80,8 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--format", default="flow", choices=["flow", "json", "dot"],
-        help="Output format: flow (default), json, or dot (Graphviz)",
+        "--format", default="flow", choices=["flow", "json", "dot", "html"],
+        help="Output format: flow (default), json, dot (Graphviz), or html (interactive chart)",
     )
     parser.add_argument("--output", default=None, metavar="FILE", help="Write output to file instead of stdout")
     parser.add_argument(
@@ -798,6 +798,202 @@ def render_dot(lineage):
     return "\n".join(lines)
 
 
+def render_html(lineage):
+    nodes = lineage["nodes"]
+    edges = lineage["edges"]
+    title = lineage.get("model_name") or lineage.get("model_id") or lineage.get("system_id", "Lineage")
+
+    # Build vis.js node/edge arrays
+    vis_nodes = []
+    vis_edges = []
+
+    type_colors = {
+        "model":    {"background": "#cce5ff", "border": "#6699cc", "font": "#000"},
+        "artifact": {"background": "#d4edda", "border": "#5a9e6f", "font": "#000"},
+        "resource": {"background": "#d4edda", "border": "#5a9e6f", "font": "#000"},
+        "revision": {"background": "#fff3cd", "border": "#c0962a", "font": "#000"},
+        "job":      {"background": "#c8f0e8", "border": "#2a9d8f", "font": "#000"},
+        "external": {"background": "#e2e3e5", "border": "#999",    "font": "#555"},
+    }
+
+    for nid, node in nodes.items():
+        colors = type_colors.get(node["type"], {"background": "#fff", "border": "#999", "font": "#000"})
+        meta = node["meta"]
+        label_lines = [node["label"]]
+
+        # Type badge
+        type_upper = node["type"].upper()
+
+        # Extra detail lines
+        if node["type"] == "job":
+            if meta.get("function") and meta["function"] != node["label"]:
+                label_lines.append(meta["function"])
+            if meta.get("status"):
+                label_lines.append(meta["status"])
+        elif node["type"] in ("artifact", "resource"):
+            if meta.get("revision_count") and meta["revision_count"] > 1:
+                label_lines.append(f'{meta["revision_count"]} revisions')
+            if meta.get("latest_size"):
+                label_lines.append(fmt_size(meta["latest_size"]))
+        elif node["type"] == "revision":
+            if meta.get("created"):
+                label_lines.append(meta["created"])
+            if meta.get("size"):
+                label_lines.append(fmt_size(meta["size"]))
+
+        vis_label = "\n".join(label_lines)
+
+        shape = "box" if node["type"] != "revision" else "ellipse"
+
+        vis_nodes.append({
+            "id": nid,
+            "label": vis_label,
+            "title": f'<b>{type_upper}</b><br/>' + "<br/>".join(
+                f"{k}: {v}" for k, v in meta.items() if v
+            ),
+            "shape": shape,
+            "color": {
+                "background": colors["background"],
+                "border": colors["border"],
+                "highlight": {"background": colors["background"], "border": "#333"},
+            },
+            "font": {"color": colors["font"], "size": 12, "face": "helvetica"},
+            "margin": 10,
+            "widthConstraint": {"maximum": 200},
+        })
+
+    for i, edge in enumerate(edges):
+        dashed = edge["relationship"] == "has_revision"
+        vis_edges.append({
+            "id": i,
+            "from": edge["from"],
+            "to": edge["to"],
+            "label": edge["relationship"] if edge["relationship"] not in ("has_revision", "has_artifact", "has_job") else "",
+            "arrows": "to",
+            "dashes": dashed,
+            "color": {"color": "#aaa" if dashed else "#5a9e6f", "highlight": "#333"},
+            "font": {"size": 10, "color": "#666", "align": "middle"},
+            "smooth": {"type": "cubicBezier", "forceDirection": "horizontal"},
+        })
+
+    nodes_json = json.dumps(vis_nodes, indent=2)
+    edges_json = json.dumps(vis_edges, indent=2)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>{title} — Resource Lineage</title>
+  <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+  <link href="https://unpkg.com/vis-network@9.1.9/dist/dist/vis-network.min.css" rel="stylesheet"/>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: Helvetica, Arial, sans-serif; background: #f8f9fa; }}
+    #header {{
+      padding: 12px 20px;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }}
+    #header h1 {{ font-size: 16px; font-weight: 600; color: #222; }}
+    #header .meta {{ font-size: 12px; color: #888; }}
+    #legend {{
+      display: flex; gap: 12px; align-items: center;
+      margin-left: auto;
+    }}
+    .legend-item {{
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: #555;
+    }}
+    .legend-dot {{
+      width: 12px; height: 12px; border-radius: 2px; border: 1px solid #999;
+    }}
+    #network {{ width: 100%; height: calc(100vh - 52px); }}
+    #tooltip {{
+      position: fixed; background: #fff; border: 1px solid #ddd;
+      border-radius: 6px; padding: 8px 12px; font-size: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15); pointer-events: none;
+      display: none; max-width: 280px; z-index: 999;
+    }}
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>{title}</h1>
+    <div class="meta">{len(nodes)} nodes &nbsp;·&nbsp; {len(edges)} edges</div>
+    <div id="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#d4edda;border-color:#5a9e6f"></div>Resource / Artifact</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c8f0e8;border-color:#2a9d8f"></div>Job</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#fff3cd;border-color:#c0962a;border-radius:50%"></div>Revision</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e2e3e5;border-color:#999"></div>External</div>
+    </div>
+  </div>
+  <div id="network"></div>
+  <div id="tooltip"></div>
+
+  <script>
+    const nodes = new vis.DataSet({nodes_json});
+    const edges = new vis.DataSet({edges_json});
+
+    const container = document.getElementById("network");
+    const options = {{
+      layout: {{
+        hierarchical: {{
+          enabled: true,
+          direction: "LR",
+          sortMethod: "directed",
+          levelSeparation: 220,
+          nodeSpacing: 100,
+          treeSpacing: 150,
+          blockShifting: true,
+          edgeMinimization: true,
+          parentCentralization: true,
+        }}
+      }},
+      physics: {{ enabled: false }},
+      interaction: {{
+        hover: true,
+        tooltipDelay: 100,
+        navigationButtons: true,
+        keyboard: true,
+      }},
+      edges: {{
+        smooth: {{ type: "cubicBezier", forceDirection: "horizontal", roundness: 0.5 }},
+        selectionWidth: 2,
+      }},
+      nodes: {{
+        borderWidth: 1.5,
+        shadow: {{ enabled: true, size: 4, x: 2, y: 2, color: "rgba(0,0,0,0.08)" }},
+      }},
+    }};
+
+    const network = new vis.Network(container, {{ nodes, edges }}, options);
+
+    // Show tooltip on hover
+    const tooltip = document.getElementById("tooltip");
+    network.on("hoverNode", params => {{
+      const node = nodes.get(params.node);
+      if (node && node.title) {{
+        tooltip.innerHTML = node.title;
+        tooltip.style.display = "block";
+      }}
+    }});
+    network.on("blurNode", () => {{ tooltip.style.display = "none"; }});
+    document.addEventListener("mousemove", e => {{
+      tooltip.style.left = (e.clientX + 16) + "px";
+      tooltip.style.top  = (e.clientY + 8)  + "px";
+    }});
+
+    // Fit on load
+    network.once("stabilized", () => network.fit({{ animation: false }}));
+  </script>
+</body>
+</html>"""
+    return html
+
+
 def list_systems(client):
     print("Fetching systems...")
     all_systems = []
@@ -869,6 +1065,14 @@ def main():
             print(f"Written to {args.output}")
         else:
             print(output)
+
+    elif args.format == "html":
+        output = render_html(lineage)
+        out_path = args.output or "lineage.html"
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        print(f"Interactive chart written to {out_path}")
+        print(f"Open it in a browser: file:///{out_path.replace(chr(92), '/')}")
 
     else:  # flow
         render_flow(lineage)
