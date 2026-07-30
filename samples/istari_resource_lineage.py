@@ -1,14 +1,22 @@
 """
-Chart the resource lineage within a model on the Istari platform.
+Chart the resource lineage within a model or system on the Istari platform.
 
 Unlike istari_digital_thread.py (which shows the containment hierarchy),
 this script builds a provenance flow graph:
 
   [input artifact/revision] ──▶ [job] ──▶ [output artifact/revision]
 
-Jobs appear as transformation nodes; artifacts and their revisions appear as
-data nodes. Source/product relationships on file revisions are used to stitch
-inputs to jobs and jobs to outputs.
+Two entry points:
+
+  --model-id   Trace a single Cameo model (artifacts + jobs).
+
+  --system-id  Trace a System — fetches the system's baseline snapshot,
+               enumerates all resource revisions in it, then builds lineage
+               from their source/product relationships. Because snapshot items
+               don't include source/product links inline, the script fetches
+               each FileRevision individually (one API call per revision).
+               Use --max-revisions to cap the number of revisions fetched
+               if the system is large.
 
 Configuration (in priority order — first match wins):
   1. --url / --token CLI flags
@@ -18,6 +26,9 @@ Configuration (in priority order — first match wins):
 
 Usage:
   python istari_resource_lineage.py --model-id <id>
+  python istari_resource_lineage.py --system-id <id>
+  python istari_resource_lineage.py --system-id <id> --max-revisions 50
+  python istari_resource_lineage.py --system-id <id> --format dot | dot -Tsvg > out.svg
   python istari_resource_lineage.py --model-id <id> --config ~/my_creds.json
   python istari_resource_lineage.py --model-id <id> --format dot | dot -Tsvg > out.svg
   python istari_resource_lineage.py --model-id <id> --format json --output lineage.json
@@ -52,10 +63,12 @@ def load_config_file(path):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Chart resource lineage (provenance flow) for an Istari model",
+        description="Chart resource lineage (provenance flow) for an Istari model or system",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--model-id", metavar="ID", required=True, help="Istari model ID to trace")
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--model-id", metavar="ID", help="Istari model ID to trace")
+    scope.add_argument("--system-id", metavar="ID", help="Istari system ID — traces all resources in the system baseline")
 
     auth = parser.add_argument_group("Auth (first match wins: flag > env var > config file)")
     auth.add_argument("--url", default=None, help="Istari registry URL")
@@ -79,6 +92,10 @@ def parse_args():
         "--jobs-only",
         action="store_true",
         help="Only show artifacts that are inputs or outputs of a job (hide unconnected artifacts)",
+    )
+    parser.add_argument(
+        "--max-revisions", type=int, default=200, metavar="N",
+        help="Max revisions to fetch when using --system-id (default: 200; each costs one API call)",
     )
     return parser.parse_args()
 
@@ -371,6 +388,203 @@ def collect_lineage(client, model_id, collapse_revisions):
     }
 
 
+def collect_lineage_system(client, system_id, collapse_revisions, max_revisions):
+    """
+    Build a provenance-flow graph for all resource revisions in a System baseline.
+
+    Steps:
+      1. get_system(system_id) → find baseline snapshot ID
+      2. list_snapshot_revisions(snapshot_id) → enumerate all revisions in the system
+      3. get_revision(revision_id) for each → fetch sources/products
+      4. Build resource nodes + job-like edges from source/product relationships
+
+    Because snapshot items don't carry source/product links, we need one
+    get_revision call per revision. Use --max-revisions to cap cost.
+    """
+    nodes = {}
+    edges = []
+
+    def add_node(node_id, node_type, label, meta=None):
+        if node_id not in nodes:
+            nodes[node_id] = {"id": node_id, "type": node_type, "label": label, "meta": meta or {}}
+
+    def add_edge(from_id, to_id, relationship):
+        edge = {"from": from_id, "to": to_id, "relationship": relationship}
+        if edge not in edges:
+            edges.append(edge)
+
+    # --- Fetch system ---
+    print(f"Fetching system {system_id}...")
+    try:
+        system = client.get_system(system_id=system_id)
+    except Exception as e:
+        sys.exit(f"Error fetching system: {e}")
+
+    system_name = safe_get(system, "name") or system_id
+    print(f"  System: {system_name}")
+
+    snapshot_id = safe_get(system, "baseline_tagged_snapshot_id")
+    if not snapshot_id:
+        # Fall back: look for configurations baseline
+        configs = safe_get(system, "configurations") or []
+        for cfg in configs:
+            snapshot_id = safe_get(cfg, "snapshot_id") or safe_get(cfg, "baseline_snapshot_id")
+            if snapshot_id:
+                break
+    if not snapshot_id:
+        sys.exit(
+            "Error: system has no baseline snapshot ID.\n"
+            "The system may not have a committed baseline yet."
+        )
+    print(f"  Baseline snapshot: {snapshot_id}")
+
+    # --- Enumerate all revisions in the snapshot ---
+    all_items = []
+    page = 1
+    while len(all_items) < max_revisions:
+        try:
+            result = client.list_snapshot_revisions(snapshot_id=snapshot_id, page=page, size=100)
+        except Exception as e:
+            sys.exit(f"Error listing snapshot revisions: {e}")
+        items = (
+            result.items if hasattr(result, "items") and result.items is not None else
+            result.content if hasattr(result, "content") and result.content is not None else []
+        )
+        if not items:
+            break
+        all_items.extend(items)
+        if len(items) < 100:
+            break
+        page += 1
+
+    if len(all_items) >= max_revisions:
+        print(f"  Warning: reached --max-revisions {max_revisions}; result may be incomplete")
+    print(f"  Found {len(all_items)} revision(s) in baseline snapshot")
+
+    # Index resource_id → node_id for cross-linking
+    resource_to_node = {}   # resource_id → node_id
+    rev_to_node = {}        # revision_id → node_id
+
+    # Build resource nodes from snapshot items
+    # Group by resource_id so we can collapse if requested
+    resource_groups = defaultdict(list)
+    for item in all_items:
+        rid = safe_get(item, "resource_id") or item.revision_id
+        resource_groups[rid].append(item)
+
+    for resource_id, items in resource_groups.items():
+        resource_type = safe_get(items[0], "resource_type") or "resource"
+        # Best display name — prefer display_name, fall back to name+ext
+        name = safe_get(items[0], "display_name") or safe_get(items[0], "name") or ""
+        ext = (safe_get(items[0], "extension") or "").lstrip(".")
+        if ext and name and not name.endswith(f".{ext}"):
+            name = f"{name}.{ext}"
+        label = name or resource_id
+
+        sizes = [safe_get(i, "size") for i in items if safe_get(i, "size")]
+        dates = [safe_get(i, "created") for i in items if safe_get(i, "created")]
+
+        res_meta = {
+            "resource_id": resource_id,
+            "resource_type": resource_type,
+            "revision_count": len(items),
+            "extension": ext,
+            "created": fmt_date(min(dates)) if dates else "",
+            "last_updated": fmt_date(max(dates)) if dates and len(dates) > 1 else "",
+            "latest_size": max(sizes) if sizes else None,
+        }
+
+        if collapse_revisions or len(items) == 1:
+            node_id = f"resource:{resource_id}"
+            add_node(node_id, "resource", label, res_meta)
+            resource_to_node[resource_id] = node_id
+            for item in items:
+                rev_to_node[item.revision_id] = node_id
+        else:
+            # One parent resource node + child revision nodes
+            res_node_id = f"resource:{resource_id}"
+            add_node(res_node_id, "resource", label, res_meta)
+            resource_to_node[resource_id] = res_node_id
+            for item in items:
+                rev_name = safe_get(item, "display_name") or safe_get(item, "name") or ""
+                rev_ext = (safe_get(item, "extension") or "").lstrip(".")
+                if rev_ext and rev_name and not rev_name.endswith(f".{rev_ext}"):
+                    rev_name = f"{rev_name}.{rev_ext}"
+                rev_label = rev_name or item.revision_id
+                rev_node_id = f"rev:{item.revision_id}"
+                add_node(rev_node_id, "revision", rev_label, {
+                    "revision_id": item.revision_id,
+                    "resource_id": resource_id,
+                    "resource_type": resource_type,
+                    "extension": rev_ext,
+                    "size": safe_get(item, "size"),
+                    "created": fmt_date(safe_get(item, "created")),
+                    "version_name": safe_get(item, "version_name"),
+                })
+                add_edge(res_node_id, rev_node_id, "has_revision")
+                rev_to_node[item.revision_id] = rev_node_id
+
+    # --- Fetch each revision to get source/product links ---
+    print(f"  Fetching source/product links for {len(all_items)} revision(s)...")
+    fetched = 0
+    errors = 0
+    for item in all_items:
+        rev_id = item.revision_id
+        try:
+            rev = client.get_revision(revision_id=rev_id)
+            fetched += 1
+        except Exception:
+            errors += 1
+            continue
+
+        src_node = rev_to_node.get(rev_id)
+        if not src_node:
+            continue
+
+        for source in (safe_get(rev, "sources") or []):
+            s_rev_id = safe_get(source, "revision_id")
+            s_res_id = safe_get(source, "resource_id") or ""
+            rel = safe_get(source, "relationship_identifier") or "source"
+            if s_rev_id:
+                target = rev_to_node.get(s_rev_id) or resource_to_node.get(s_res_id)
+                if not target:
+                    res_type = safe_get(source, "resource_type") or "resource"
+                    lbl = f"{res_type}:{s_res_id}" if s_res_id else s_rev_id
+                    target = f"rev:{s_rev_id}"
+                    add_node(target, "external", lbl, {
+                        "revision_id": s_rev_id,
+                        "resource_id": s_res_id,
+                        "resource_type": res_type,
+                    })
+                add_edge(target, src_node, rel)
+
+        for product in (safe_get(rev, "products") or []):
+            p_rev_id = safe_get(product, "revision_id")
+            p_res_id = safe_get(product, "resource_id") or ""
+            rel = safe_get(product, "relationship_identifier") or "product"
+            if p_rev_id:
+                target = rev_to_node.get(p_rev_id) or resource_to_node.get(p_res_id)
+                if not target:
+                    res_type = safe_get(product, "resource_type") or "resource"
+                    lbl = f"{res_type}:{p_res_id}" if p_res_id else p_rev_id
+                    target = f"rev:{p_rev_id}"
+                    add_node(target, "external", lbl, {
+                        "revision_id": p_rev_id,
+                        "resource_id": p_res_id,
+                        "resource_type": res_type,
+                    })
+                add_edge(src_node, target, rel)
+
+    print(f"  Fetched {fetched} revision(s) successfully" + (f", {errors} skipped (permission/not found)" if errors else ""))
+
+    return {
+        "system_id": system_id,
+        "model_name": system_name,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
 def filter_jobs_only(lineage):
     """Remove artifact/revision nodes that have no connection to any job."""
     nodes = lineage["nodes"]
@@ -511,6 +725,7 @@ def render_dot(lineage):
     type_style = {
         "model":    ('box',       'lightblue',   'black'),
         "artifact": ('box',       'lightgreen',  'black'),
+        "resource": ('box',       'lightgreen',  'black'),
         "revision": ('ellipse',   'lightyellow', 'black'),
         "job":      ('component', 'lightsalmon', 'black'),
         "external": ('box',       'lightgrey',   'grey'),
@@ -590,7 +805,10 @@ def main():
     if compat:
         print(f"Connected to Istari platform  version={compat.server_version}")
 
-    lineage = collect_lineage(client, args.model_id, args.collapse_revisions)
+    if args.system_id:
+        lineage = collect_lineage_system(client, args.system_id, args.collapse_revisions, args.max_revisions)
+    else:
+        lineage = collect_lineage(client, args.model_id, args.collapse_revisions)
 
     if args.jobs_only:
         lineage = filter_jobs_only(lineage)
