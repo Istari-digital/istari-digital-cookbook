@@ -706,7 +706,7 @@ def render_flow(lineage):
             print(f"{child_prefix}{'└── ' if is_child_last else '├── '}─({rel})─▶")
             print_node(child_id, child_prefix + ("    " if is_child_last else "│   "), True, depth + 1)
 
-    model_name = lineage.get("model_name", lineage["model_id"])
+    model_name = lineage.get("model_name") or lineage.get("model_id") or lineage.get("system_id", "")
     print(f"Resource lineage: {model_name}")
     print(f"{'─' * (len(model_name) + 20)}")
 
@@ -721,7 +721,7 @@ def render_flow(lineage):
 def render_dot(lineage):
     nodes = lineage["nodes"]
     edges = lineage["edges"]
-    model_name = lineage.get("model_name", lineage["model_id"])
+    model_name = lineage.get("model_name") or lineage.get("model_id") or lineage.get("system_id", "")
 
     type_style = {
         "model":    ('box',       'lightblue',   'black'),
