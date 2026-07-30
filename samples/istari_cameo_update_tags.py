@@ -106,9 +106,13 @@ def parse_args():
     )
 
     # --- Istari platform auth ---
-    auth = parser.add_argument_group("Istari platform auth")
-    auth.add_argument("--url", default=None, help="Istari registry URL (overrides ISTARI_REGISTRY_URL)")
-    auth.add_argument("--token", default=None, help="Istari auth token (overrides ISTARI_REGISTRY_AUTH_TOKEN)")
+    auth = parser.add_argument_group("Istari platform auth (first match wins: flag > env var > config file)")
+    auth.add_argument("--url", default=None, help="Istari registry URL")
+    auth.add_argument("--token", default=None, help="Istari auth token")
+    auth.add_argument(
+        "--config", default=DEFAULT_CONFIG, metavar="FILE",
+        help=f"JSON credentials file {{\"url\":...,\"token\":...}} (default: {DEFAULT_CONFIG})",
+    )
 
     # --- Tag specification ---
     tags = parser.add_argument_group("Tag specification (choose one)")
@@ -176,13 +180,38 @@ def validate_args(args):
             sys.exit(f"Error: part search summary file not found: {args.part_search_summary}")
 
 
+DEFAULT_CONFIG = os.path.expanduser("~/.istari/config.json")
+
+
+def load_config_file(path):
+    """Load url/token from a JSON config file. Returns (url, token), either may be None."""
+    expanded = os.path.expanduser(path)
+    if not os.path.isfile(expanded):
+        if path != DEFAULT_CONFIG:
+            sys.exit(f"Error: config file not found: {expanded}")
+        return None, None
+    try:
+        with open(expanded) as f:
+            cfg = json.load(f)
+    except Exception as e:
+        sys.exit(f"Error reading config file {expanded}: {e}")
+    return cfg.get("url"), cfg.get("token")
+
+
 def build_client(args) -> Client:
-    registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL")
-    registry_auth_token = args.token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN")
+    cfg_url, cfg_token = load_config_file(args.config)
+    registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL") or cfg_url
+    registry_auth_token = args.token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN") or cfg_token
     if not registry_url:
-        sys.exit("Error: registry URL not set. Use --url or set ISTARI_REGISTRY_URL.")
+        sys.exit(
+            f"Error: registry URL not set.\n"
+            f"  Use --url, set ISTARI_REGISTRY_URL, or add \"url\" to {args.config}"
+        )
     if not registry_auth_token:
-        sys.exit("Error: auth token not set. Use --token or set ISTARI_REGISTRY_AUTH_TOKEN.")
+        sys.exit(
+            f"Error: auth token not set.\n"
+            f"  Use --token, set ISTARI_REGISTRY_AUTH_TOKEN, or add \"token\" to {args.config}"
+        )
     return Client(Configuration(registry_url=registry_url, registry_auth_token=registry_auth_token))
 
 

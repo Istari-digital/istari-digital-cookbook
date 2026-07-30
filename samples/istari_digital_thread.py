@@ -4,12 +4,15 @@ Trace the digital thread for a model or revision in the Istari platform.
 Walks the model's artifacts and jobs, following source/product relationships
 on file revisions to build a connected graph, then prints it as a tree.
 
-Configuration via environment variables or CLI flags:
-  ISTARI_REGISTRY_URL        - Platform URL
-  ISTARI_REGISTRY_AUTH_TOKEN - Personal access token
+Configuration (in priority order — first match wins):
+  1. --url / --token CLI flags
+  2. ISTARI_REGISTRY_URL / ISTARI_REGISTRY_AUTH_TOKEN environment variables
+  3. --config FILE  (default: ~/.istari/config.json)
+     JSON format: {"url": "https://...", "token": "your-token"}
 
 Usage:
   python istari_digital_thread.py --model-id <id>
+  python istari_digital_thread.py --model-id <id> --config ~/my_creds.json
   python istari_digital_thread.py --revision-id <id>
   python istari_digital_thread.py --model-id <id> --output thread.json
   python istari_digital_thread.py --model-id <id> --format dot > thread.dot
@@ -29,6 +32,24 @@ except ImportError:
     NotFoundException = Exception
 
 
+DEFAULT_CONFIG = os.path.expanduser("~/.istari/config.json")
+
+
+def load_config_file(path):
+    """Load url/token from a JSON config file. Returns (url, token), either may be None."""
+    expanded = os.path.expanduser(path)
+    if not os.path.isfile(expanded):
+        if path != DEFAULT_CONFIG:
+            sys.exit(f"Error: config file not found: {expanded}")
+        return None, None
+    try:
+        with open(expanded) as f:
+            cfg = json.load(f)
+    except Exception as e:
+        sys.exit(f"Error reading config file {expanded}: {e}")
+    return cfg.get("url"), cfg.get("token")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Trace the Istari digital thread for a model",
@@ -37,8 +58,15 @@ def parse_args():
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--model-id", metavar="ID", help="Istari model ID to trace")
     scope.add_argument("--revision-id", metavar="ID", help="Trace a single file revision and its source/product links")
-    parser.add_argument("--url", default=None, help="Istari registry URL (overrides ISTARI_REGISTRY_URL)")
-    parser.add_argument("--token", default=None, help="Istari auth token (overrides ISTARI_REGISTRY_AUTH_TOKEN)")
+
+    auth = parser.add_argument_group("Auth (first match wins: flag > env var > config file)")
+    auth.add_argument("--url", default=None, help="Istari registry URL")
+    auth.add_argument("--token", default=None, help="Istari auth token")
+    auth.add_argument(
+        "--config", default=DEFAULT_CONFIG, metavar="FILE",
+        help=f"JSON credentials file {{\"url\":...,\"token\":...}} (default: {DEFAULT_CONFIG})",
+    )
+
     parser.add_argument(
         "--output", default=None, metavar="FILE",
         help="Write JSON thread output to this file (default: print to stdout)",
@@ -56,12 +84,19 @@ def parse_args():
 
 def build_client(args):
     from istari_digital_client import Client, Configuration
-    registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL")
-    registry_auth_token = args.token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN")
+    cfg_url, cfg_token = load_config_file(args.config)
+    registry_url = args.url or os.environ.get("ISTARI_REGISTRY_URL") or cfg_url
+    registry_auth_token = args.token or os.environ.get("ISTARI_REGISTRY_AUTH_TOKEN") or cfg_token
     if not registry_url:
-        sys.exit("Error: registry URL not set. Use --url or set ISTARI_REGISTRY_URL.")
+        sys.exit(
+            f"Error: registry URL not set.\n"
+            f"  Use --url, set ISTARI_REGISTRY_URL, or add \"url\" to {args.config}"
+        )
     if not registry_auth_token:
-        sys.exit("Error: auth token not set. Use --token or set ISTARI_REGISTRY_AUTH_TOKEN.")
+        sys.exit(
+            f"Error: auth token not set.\n"
+            f"  Use --token, set ISTARI_REGISTRY_AUTH_TOKEN, or add \"token\" to {args.config}"
+        )
     return Client(Configuration(registry_url=registry_url, registry_auth_token=registry_auth_token))
 
 
