@@ -80,7 +80,27 @@ def parse_args():
     scope.add_argument("--status", metavar="STATUS", default="Completed",
                        help="Job status filter: Completed (default), Failed, all")
     scope.add_argument("--all-users", action="store_true", help="Include jobs from all users (requires admin)")
-    scope.add_argument("--max-jobs", type=int, default=100, metavar="N", help="Max jobs to fetch (default: 100)")
+    scope.add_argument("--max-jobs", type=int, default=100, metavar="N", help="Max jobs to fetch per pass (default: 100)")
+    scope.add_argument(
+        "--follow-chain", action="store_true", default=True,
+        help="Follow artifacts into downstream jobs across models/systems (default: on)",
+    )
+    scope.add_argument(
+        "--no-follow-chain", dest="follow_chain", action="store_false",
+        help="Disable chain following — only show jobs from the initial fetch",
+    )
+    scope.add_argument(
+        "--max-depth", type=int, default=10, metavar="N",
+        help="Max expansion passes when following the chain (default: 10)",
+    )
+    scope.add_argument(
+        "--resolve-names", action="store_true", default=True,
+        help="Fetch file names for artifact nodes (one API call per unique revision, default: on)",
+    )
+    scope.add_argument(
+        "--no-resolve-names", dest="resolve_names", action="store_false",
+        help="Skip name resolution — show revision IDs instead of file names",
+    )
 
     auth = parser.add_argument_group("Auth (first match wins: flag > env var > config file)")
     auth.add_argument("--url", default=None, help="Istari registry URL")
@@ -158,18 +178,87 @@ def job_status_str(job):
     return None
 
 
+def fetch_jobs_page(client, status_filter, model_id, all_users, max_jobs):
+    """Paginate list_jobs and return up to max_jobs items."""
+    results = []
+    page = 1
+    while len(results) < max_jobs:
+        try:
+            result = client.list_jobs(
+                model_id=model_id or None,
+                status_name=status_filter,
+                all_users=all_users or None,
+                page=page,
+                size=min(100, max_jobs - len(results)),
+            )
+        except Exception as e:
+            sys.exit(f"Error listing jobs: {e}")
+        items = (
+            result.items if hasattr(result, "items") and result.items is not None else
+            result.content if hasattr(result, "content") and result.content is not None else []
+        )
+        if not items:
+            break
+        results.extend(items)
+        if len(items) < 100:
+            break
+        page += 1
+    return results
+
+
+def enrich_node(nodes, node_id, rev):
+    """Fill in label and meta on an existing stub node from a revision object."""
+    if node_id not in nodes:
+        return
+    n = nodes[node_id]
+    display = safe_get(rev, "display_name") or safe_get(rev, "name") or safe_get(rev, "stem") or ""
+    ext = (safe_get(rev, "extension") or safe_get(rev, "suffix") or "").lstrip(".")
+    if ext and display and not display.endswith(f".{ext}"):
+        display = f"{display}.{ext}"
+    if display and (not n["label"] or n["label"] == n["meta"].get("revision_id") or n["label"].endswith("…")):
+        n["label"] = display
+    m = n["meta"]
+    for key, val in [
+        ("resource_id",   safe_get(rev, "resource_id")),
+        ("resource_type", safe_get(rev, "resource_type")),
+        ("extension",     ext),
+        ("size",          safe_get(rev, "size")),
+        ("created",       fmt_date(safe_get(rev, "created"))),
+    ]:
+        if val and not m.get(key):
+            m[key] = val
+
+
 def collect_lineage(client, args):
     """
-    Fetch jobs and build a provenance graph:
-      revision node → job node → revision node
+    Build a job-execution provenance graph, following the chain through
+    produced artifacts into downstream jobs across any model or system.
 
-    Each job's file revisions carry sources (inputs) and products (outputs).
-    We stitch these into:
-      source_revision ──▶ job ──▶ product_revision
+    Pass 1: fetch seed jobs (filtered by --model-id / --function / --status).
+    Pass N: collect all product revision/resource IDs from jobs already in the
+            graph → fetch all jobs (no model filter) → add any whose source
+            revision IDs intersect the known product set → repeat until stable
+            or --max-depth is reached.
     """
+    from istari_digital_client.v2.models.job_status_name import JobStatusName
+
+    status_filter = None
+    if args.status and args.status.lower() != "all":
+        try:
+            status_filter = JobStatusName(args.status.capitalize())
+        except ValueError:
+            sys.exit(f"Error: unknown status '{args.status}'. Valid: Completed, Failed, Running, Pending, all")
+
     nodes = {}
     edges = []
     seen_edges = set()
+    seen_job_ids = set()
+
+    # Indexes: revision_id / resource_id → graph node_id
+    rev_to_node = {}
+    # Track which revision/resource IDs are outputs of known jobs
+    known_product_rev_ids = set()
+    known_product_res_ids = set()
 
     def add_node(node_id, node_type, label, meta=None):
         if node_id not in nodes:
@@ -181,85 +270,34 @@ def collect_lineage(client, args):
             seen_edges.add(key)
             edges.append({"from": from_id, "to": to_id, "relationship": relationship})
 
-    # --- Fetch jobs ---
-    from istari_digital_client.v2.models.job_status_name import JobStatusName
-
-    status_filter = None
-    if args.status and args.status.lower() != "all":
-        try:
-            status_filter = JobStatusName(args.status.capitalize())
-        except ValueError:
-            sys.exit(f"Error: unknown status '{args.status}'. Valid: Completed, Failed, Running, Pending, all")
-
-    print(f"Fetching jobs (status={args.status}, max={args.max_jobs})...")
-    all_jobs = []
-    page = 1
-    while len(all_jobs) < args.max_jobs:
-        try:
-            result = client.list_jobs(
-                model_id=args.model_id or None,
-                status_name=status_filter,
-                all_users=args.all_users or None,
-                page=page,
-                size=min(100, args.max_jobs - len(all_jobs)),
-            )
-        except Exception as e:
-            sys.exit(f"Error listing jobs: {e}")
-        items = (
-            result.items if hasattr(result, "items") and result.items is not None else
-            result.content if hasattr(result, "content") and result.content is not None else []
-        )
-        if not items:
-            break
-        all_jobs.extend(items)
-        if len(items) < 100:
-            break
-        page += 1
-
-    # Apply function filter
-    if args.function:
-        fn_filter = args.function.lower()
-        all_jobs = [j for j in all_jobs if fn_filter in job_fn_name(j).lower()]
-
-    print(f"  Found {len(all_jobs)} job(s)")
-
-    # Index: revision_id → node_id (populated as we encounter revisions)
-    rev_to_node = {}
-
-    def ensure_rev_node(rev_id, resource_id="", resource_type="", display_name="", extension="", size=None, created=""):
-        """Get or create a revision/resource node."""
+    def ensure_rev_node(rev_id, resource_id="", resource_type=""):
         if args.collapse_revisions and resource_id:
             node_id = f"resource:{resource_id}"
         else:
             node_id = f"rev:{rev_id}"
-
         if node_id not in nodes:
-            name = display_name or ""
-            ext = extension.lstrip(".") if extension else ""
-            if ext and name and not name.endswith(f".{ext}"):
-                name = f"{name}.{ext}"
-            label = name or (resource_id[:16] + "…" if resource_id and len(resource_id) > 16 else resource_id or rev_id)
+            label = resource_id[:16] + "…" if resource_id and len(resource_id) > 16 else resource_id or rev_id
             add_node(node_id, "resource", label, {
                 "revision_id": rev_id,
                 "resource_id": resource_id,
                 "resource_type": resource_type,
-                "extension": ext,
-                "size": size,
-                "created": created,
             })
         rev_to_node[rev_id] = node_id
         if resource_id:
-            rev_to_node[resource_id] = node_id  # also index by resource_id
+            rev_to_node[resource_id] = node_id
         return node_id
 
-    # --- Build graph from job file revisions ---
-    for job in all_jobs:
+    def ingest_job(job):
+        """Add a job and its source/product edges to the graph. Returns set of new product rev IDs."""
         job_id = job.id
+        if job_id in seen_job_ids:
+            return set(), set()
+        seen_job_ids.add(job_id)
+
         fn = job_fn_name(job)
         status = job_status_str(job)
         model_id = safe_get(job, "model_id") or ""
         created = fmt_date(safe_get(job, "created"))
-
         job_node_id = f"job:{job_id}"
         add_node(job_node_id, "job", fn, {
             "job_id": job_id,
@@ -269,82 +307,178 @@ def collect_lineage(client, args):
             "created": created,
         })
 
+        new_prod_revs = set()
+        new_prod_ress = set()
         job_revs = safe_get(job, "file", "revisions") or []
         for rev in job_revs:
-            rev_id = rev.id
+            enrich_node(nodes, rev_to_node.get(rev.id) or rev_to_node.get(safe_get(rev, "resource_id") or ""), rev)
 
-            # Sources → inputs to the job
             for source in (safe_get(rev, "sources") or []):
                 src_rev_id = safe_get(source, "revision_id")
                 src_res_id = safe_get(source, "resource_id") or ""
-                src_res_type = safe_get(source, "resource_type") or ""
                 rel = safe_get(source, "relationship_identifier") or "input"
                 if src_rev_id:
-                    # Check if we already know this node
                     src_node = rev_to_node.get(src_rev_id) or rev_to_node.get(src_res_id)
                     if not src_node:
-                        src_node = ensure_rev_node(
-                            src_rev_id,
-                            resource_id=src_res_id,
-                            resource_type=src_res_type,
-                        )
+                        src_node = ensure_rev_node(src_rev_id, src_res_id, safe_get(source, "resource_type") or "")
                     add_edge(src_node, job_node_id, rel)
 
-            # Products → outputs from the job
             for product in (safe_get(rev, "products") or []):
                 prod_rev_id = safe_get(product, "revision_id")
                 prod_res_id = safe_get(product, "resource_id") or ""
-                prod_res_type = safe_get(product, "resource_type") or ""
                 rel = safe_get(product, "relationship_identifier") or "output"
                 if prod_rev_id:
                     prod_node = rev_to_node.get(prod_rev_id) or rev_to_node.get(prod_res_id)
                     if not prod_node:
-                        prod_node = ensure_rev_node(
-                            prod_rev_id,
-                            resource_id=prod_res_id,
-                            resource_type=prod_res_type,
-                        )
+                        prod_node = ensure_rev_node(prod_rev_id, prod_res_id, safe_get(product, "resource_type") or "")
                     add_edge(job_node_id, prod_node, rel)
+                    new_prod_revs.add(prod_rev_id)
+                    if prod_res_id:
+                        new_prod_ress.add(prod_res_id)
 
-    # --- Enrich resource nodes with names from job revision metadata ---
-    # Job file revisions themselves describe their own resource; check each
-    for job in all_jobs:
-        job_revs = safe_get(job, "file", "revisions") or []
-        for rev in job_revs:
-            rev_id = rev.id
-            res_id = safe_get(rev, "resource_id") or ""
-            res_type = safe_get(rev, "resource_type") or ""
-            display = safe_get(rev, "display_name") or safe_get(rev, "name") or safe_get(rev, "stem") or ""
-            ext = (safe_get(rev, "extension") or safe_get(rev, "suffix") or "").lstrip(".")
-            size = safe_get(rev, "size")
-            created = fmt_date(safe_get(rev, "created"))
-            # Update any existing stub node for this revision
-            node_id = rev_to_node.get(rev_id) or rev_to_node.get(res_id)
-            if node_id and node_id in nodes:
-                n = nodes[node_id]
-                if not n["label"] or n["label"] == rev_id or n["label"].endswith("…"):
-                    name = display
-                    if ext and name and not name.endswith(f".{ext}"):
-                        name = f"{name}.{ext}"
-                    if name:
-                        n["label"] = name
-                m = n["meta"]
-                if not m.get("resource_id") and res_id:
-                    m["resource_id"] = res_id
-                if not m.get("resource_type") and res_type:
-                    m["resource_type"] = res_type
-                if not m.get("extension") and ext:
-                    m["extension"] = ext
-                if not m.get("size") and size:
-                    m["size"] = size
-                if not m.get("created") and created:
-                    m["created"] = created
+        return new_prod_revs, new_prod_ress
+
+    def job_uses_known_product(job):
+        """Return True if any source of this job matches a known product revision/resource."""
+        for rev in (safe_get(job, "file", "revisions") or []):
+            for source in (safe_get(rev, "sources") or []):
+                if safe_get(source, "revision_id") in known_product_rev_ids:
+                    return True
+                if safe_get(source, "resource_id") in known_product_res_ids:
+                    return True
+        return False
+
+    # ── Pass 1: seed jobs (apply all user filters) ──────────────────────────
+    fn_filter = (args.function or "").lower()
+    print(f"Pass 1: fetching seed jobs (status={args.status}, max={args.max_jobs}"
+          + (f", model={args.model_id}" if args.model_id else "")
+          + (f", function={args.function}" if args.function else "") + ")...")
+
+    seed_jobs = fetch_jobs_page(client, status_filter, args.model_id, args.all_users, args.max_jobs)
+    if fn_filter:
+        seed_jobs = [j for j in seed_jobs if fn_filter in job_fn_name(j).lower()]
+    print(f"  {len(seed_jobs)} seed job(s)")
+
+    for job in seed_jobs:
+        new_revs, new_ress = ingest_job(job)
+        known_product_rev_ids |= new_revs
+        known_product_res_ids |= new_ress
+
+    # ── Passes 2…N: expand downstream ───────────────────────────────────────
+    if args.follow_chain and (known_product_rev_ids or known_product_res_ids):
+        for depth in range(2, args.max_depth + 2):
+            if not known_product_rev_ids and not known_product_res_ids:
+                break
+
+            print(f"Pass {depth}: searching for downstream jobs consuming "
+                  f"{len(known_product_rev_ids)} known artifact(s)...")
+
+            # Fetch all jobs without model filter to cross system boundaries.
+            # We must check all jobs because the API has no source-revision filter.
+            candidate_jobs = fetch_jobs_page(client, status_filter, None, args.all_users, args.max_jobs)
+            if fn_filter:
+                candidate_jobs = [j for j in candidate_jobs if fn_filter in job_fn_name(j).lower()]
+
+            new_this_pass = 0
+            new_revs_this_pass = set()
+            new_ress_this_pass = set()
+            for job in candidate_jobs:
+                if job.id in seen_job_ids:
+                    continue
+                if job_uses_known_product(job):
+                    new_revs, new_ress = ingest_job(job)
+                    new_revs_this_pass |= new_revs
+                    new_ress_this_pass |= new_ress
+                    new_this_pass += 1
+
+            print(f"  Added {new_this_pass} downstream job(s)")
+            if new_this_pass == 0:
+                break
+
+            # Only expand on newly discovered products to avoid re-scanning everything
+            known_product_rev_ids = new_revs_this_pass
+            known_product_res_ids = new_ress_this_pass
 
     return {
         "nodes": nodes,
         "edges": edges,
-        "job_count": len(all_jobs),
+        "job_count": len(seen_job_ids),
     }
+
+
+def resolve_resource_names(client, lineage):
+    """
+    For every resource node whose label is still an ID (no human-readable name),
+    call get_revision to fetch the file name. One API call per unique revision ID.
+    Nodes that already have a proper name are skipped.
+    """
+    nodes = lineage["nodes"]
+
+    def looks_like_id(label):
+        # UUIDs, bare hex IDs, or truncated IDs ending in "…"
+        import re
+        if not label:
+            return True
+        if label.endswith("…"):
+            return True
+        # UUID pattern
+        if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", label, re.I):
+            return True
+        # Long hex string (resource IDs are sometimes plain hex)
+        if re.fullmatch(r"[0-9a-f]{24,}", label, re.I):
+            return True
+        return False
+
+    stubs = [
+        n for n in nodes.values()
+        if n["type"] == "resource" and looks_like_id(n["label"])
+    ]
+
+    if not stubs:
+        return
+
+    print(f"Resolving names for {len(stubs)} artifact(s)...")
+    resolved = 0
+    skipped = 0
+    for node in stubs:
+        rev_id = node["meta"].get("revision_id")
+        if not rev_id:
+            skipped += 1
+            continue
+        try:
+            rev = client.get_revision(revision_id=rev_id)
+        except Exception:
+            skipped += 1
+            continue
+
+        display = (
+            safe_get(rev, "display_name")
+            or safe_get(rev, "name")
+            or safe_get(rev, "stem")
+            or ""
+        )
+        ext = (safe_get(rev, "extension") or safe_get(rev, "suffix") or "").lstrip(".")
+        if ext and display and not display.endswith(f".{ext}"):
+            display = f"{display}.{ext}"
+
+        if display:
+            node["label"] = display
+            m = node["meta"]
+            if not m.get("extension") and ext:
+                m["extension"] = ext
+            if not m.get("size"):
+                m["size"] = safe_get(rev, "size")
+            if not m.get("created"):
+                m["created"] = fmt_date(safe_get(rev, "created"))
+            if not m.get("resource_id"):
+                m["resource_id"] = safe_get(rev, "resource_id") or ""
+            if not m.get("resource_type"):
+                m["resource_type"] = safe_get(rev, "resource_type") or ""
+            resolved += 1
+        else:
+            skipped += 1
+
+    print(f"  Resolved {resolved} name(s)" + (f", {skipped} could not be resolved" if skipped else ""))
 
 
 def render_flow(lineage):
@@ -639,6 +773,9 @@ def main():
         print(f"Connected to Istari platform  version={compat.server_version}")
 
     lineage = collect_lineage(client, args)
+
+    if args.resolve_names:
+        resolve_resource_names(client, lineage)
 
     if args.format == "json":
         output = json.dumps(lineage, indent=2, default=str)
